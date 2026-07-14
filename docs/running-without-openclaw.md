@@ -13,9 +13,14 @@ Install these tools on the machine where you'll run the scripts:
 | Tool | Purpose | Install |
 |------|---------|---------|
 | `gh` | GitHub CLI (issues, PRs, forks) | `brew install gh` or [cli.github.com](https://cli.github.com) |
-| `lychee` | Link checker | `brew install lychee` or [github.com/lycheeverse/lychee](https://github.com/lycheeverse/lychee) |
+| `lychee` (>= 0.23.0) | Link checker | `brew install lychee` or [github.com/lycheeverse/lychee](https://github.com/lycheeverse/lychee) |
 | `jq` | JSON processor | `brew install jq` |
 | `bash` 4+ | Shell | macOS ships 3.2; use `brew install bash` for 4+ |
+
+> **lychee version.** Use lychee >= 0.23.0. The scanner relies on lychee's default
+> behavior of excluding URLs inside inline code spans and fenced code blocks; do not
+> pass `--include-verbatim`. Older or differently-configured versions may extract
+> code-block URLs and report them as broken links (false positives).
 
 Authenticate `gh` with a GitHub account that has:
 - Read access to all repos in the target org
@@ -139,7 +144,7 @@ crontab -e
 
 You could also run these as scheduled workflows. The scripts just need `gh`, `lychee`, `jq`, and the repos checked out. A workflow would:
 1. Checkout all org repos
-2. Install lychee
+2. Install lychee (>= 0.23.0)
 3. Run the scanner/fixer script
 4. (Optional) Post results to Slack/Discord via webhook
 
