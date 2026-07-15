@@ -120,6 +120,34 @@ write_fixture "$TEST_TMPDIR/unreach.json" \
 run_test "unreachable status token" "$TEST_TMPDIR/unreach.json" '.[0].status' 'unreachable'
 
 # =============================================================================
+# Status normalization: remaining text-status branches (timeout, dns, error)
+# and the null-status catch-all (unknown).
+# =============================================================================
+echo "Test 7b: text status normalized to timeout"
+write_fixture "$TEST_TMPDIR/timeout.json" \
+  "docs/f.md" "https://real-host.example.org/t" '{"text":"Timeout"}'
+run_test "timeout status token" "$TEST_TMPDIR/timeout.json" '.[0].status' 'timeout'
+
+echo "Test 7c: text status normalized to dns"
+write_fixture "$TEST_TMPDIR/dns.json" \
+  "docs/f.md" "https://real-host.example.org/d" '{"text":"Failed to resolve host"}'
+run_test "dns status token (resolve)" "$TEST_TMPDIR/dns.json" '.[0].status' 'dns'
+
+write_fixture "$TEST_TMPDIR/dns2.json" \
+  "docs/f.md" "https://real-host.example.org/d2" '{"text":"DNS error"}'
+run_test "dns status token (dns)" "$TEST_TMPDIR/dns2.json" '.[0].status' 'dns'
+
+echo "Test 7d: unrecognized text status falls back to error"
+write_fixture "$TEST_TMPDIR/err.json" \
+  "docs/f.md" "https://real-host.example.org/e" '{"text":"Something weird happened"}'
+run_test "error catch-all token" "$TEST_TMPDIR/err.json" '.[0].status' 'error'
+
+echo "Test 7e: null status normalized to unknown"
+jq -n '{ error_map: { "docs/f.md": [ { url: "https://real-host.example.org/u", status: null } ] } }' \
+  > "$TEST_TMPDIR/unknown.json"
+run_test "unknown status token" "$TEST_TMPDIR/unknown.json" '.[0].status' 'unknown'
+
+# =============================================================================
 # Edge cases: empty / missing error_map yields no output; valid JSONL
 # =============================================================================
 echo "Test 8: missing error_map yields no output"
