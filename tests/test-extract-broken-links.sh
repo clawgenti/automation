@@ -135,6 +135,25 @@ jq -n '{ error_map: { "docs/g.md": [ { url: "Error building URL", status: {text:
   > "$TEST_TMPDIR/nonurl.json"
 run_test "non-URL entry skipped" "$TEST_TMPDIR/nonurl.json" 'length' '0'
 
+# =============================================================================
+# Stdin path: reading the report via "-" behaves like reading from a file
+# =============================================================================
+echo "Test 11: stdin (-) path works"
+write_fixture "$TEST_TMPDIR/stdin.json" \
+  "docs/h.md" \
+  "https://example.invalid/stdin-gone" \
+  '{"code":404}'
+STDIN_URL=$(cat "$TEST_TMPDIR/stdin.json" | "$EXTRACTOR" - "$REPO" "$REPOS_PREFIX" | jq -s -r '.[0].url')
+if [ "$STDIN_URL" = "https://example.invalid/stdin-gone" ]; then
+  echo "  PASS: stdin path emits the broken link"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: stdin path emits the broken link"
+  echo "    Expected: https://example.invalid/stdin-gone"
+  echo "    Got:      $STDIN_URL"
+  FAIL=$((FAIL + 1))
+fi
+
 # --- Summary ---
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
