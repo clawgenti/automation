@@ -84,7 +84,7 @@ jq -r --arg repo "$REPO_NAME" --arg repos_dir "$REPOS_PREFIX" '
     url: .url,
     status: $status,
     category: (
-      if (.url | test("github\\.com/kagenti")) then "internal"
+      if (.url | test("github\\.com/(kagenti|rossoctl)")) then "internal"
       else "external"
       end
     )

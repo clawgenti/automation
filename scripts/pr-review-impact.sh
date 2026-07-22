@@ -38,10 +38,10 @@ LOOKBACK_LIMIT=200
 #
 get_repos() {
   printf '%s\n' \
-    "kagenti/kagenti" \
-    "kagenti/kagenti-extensions" \
-    "kagenti/automation" \
-    "kagenti/agent-skills"
+    "rossoctl/rossoctl" \
+    "rossoctl/cortex" \
+    "rossoctl/automation" \
+    "rossoctl/agent-skills"
 }
 
 # --- CLI args ---

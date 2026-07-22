@@ -340,7 +340,7 @@ TREND_TABLE=$(jq -r '
 
 # Build per-repo breakdown with issue counts
 # Single org-wide query for all open scanner issues, then count client-side
-issue_search=$(gh_with_backoff search issues "org:kagenti in:title \"Broken link in\" state:open" --json repository --jq '.[].repository.nameWithOwner' 2>/dev/null || true)
+issue_search=$(gh_with_backoff search issues "org:rossoctl in:title \"Broken link in\" state:open" --json repository --jq '.[].repository.nameWithOwner' 2>/dev/null || true)
 declare -A ISSUE_COUNTS
 if [ -n "$issue_search" ]; then
   while IFS= read -r r; do

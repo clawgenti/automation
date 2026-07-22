@@ -112,6 +112,13 @@ write_fixture "$TEST_TMPDIR/int.json" \
   '{"code":404}'
 run_test "internal category" "$TEST_TMPDIR/int.json" '.[0].category' 'internal'
 
+echo "Test 6b: rossoctl GitHub URL is category internal (post-rename)"
+write_fixture "$TEST_TMPDIR/int-rossoctl.json" \
+  "docs/e2.md" \
+  "https://github.com/rossoctl/rossoctl/blob/main/missing.md" \
+  '{"code":404}'
+run_test "internal category (rossoctl)" "$TEST_TMPDIR/int-rossoctl.json" '.[0].category' 'internal'
+
 echo "Test 7: text status normalized to unreachable"
 write_fixture "$TEST_TMPDIR/unreach.json" \
   "docs/f.md" \
