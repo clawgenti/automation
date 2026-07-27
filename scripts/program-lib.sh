@@ -841,11 +841,14 @@ core_repo_names() {
   get_core_repos | sed 's|^[^/]*/||'
 }
 
-# Map a local clone directory basename to its canonical repo name.
+# Map a local clone directory basename to its canonical bare repo name.
 #
 # Clone dirs may still use pre-rename names; this encapsulates the rename
 # remap table in one place so every script agrees. Unknown names pass through
 # unchanged (identity), so non-remapped repos need no special handling.
+#
+# Returns: the bare repo name only (e.g. "rossoctl"), NOT an owner/name pair.
+#          Prepend the owner to build a full API reference, e.g. "rossoctl/$canon".
 #
 # Usage: canon=$(canonical_repo_for_dir "$repo_dir_basename")
 # Args:
