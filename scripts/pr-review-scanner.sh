@@ -13,7 +13,7 @@ source "$SCRIPT_DIR/program-lib.sh"
 
 # --- Configuration ---
 BOT_USER="clawgenti"
-REPOS=("kagenti/kagenti" "kagenti/kagenti-extensions" "kagenti/automation" "kagenti/agent-skills")
+REPOS=("rossoctl/rossoctl" "rossoctl/cortex" "rossoctl/automation" "rossoctl/agent-skills")
 LABEL="ready-for-ai-review"
 REVIEW_MARKER="<!-- reviewed:"
 STALE_THRESHOLD_MIN=30
@@ -50,7 +50,7 @@ OPTIONS:
 
 OUTPUT:
   JSON array of eligible PRs to stdout:
-  [{"repo": "kagenti/kagenti", "number": 123, "head_sha": "abc123"}]
+  [{"repo": "rossoctl/rossoctl", "number": 123, "head_sha": "abc123"}]
 
 REPORTS:
   latest.json   Current scan results (overwritten each run)
