@@ -806,7 +806,9 @@ create_fork_pr() {
 # Fails loud: if the file is missing or yields zero repos, prints an error to
 # stderr and returns 1 -- callers must never silently scan an empty repo set.
 #
-# Usage: mapfile -t REPOS < <(get_core_repos) || exit 1
+# Usage (portable; mapfile is bash 4+ and absent on macOS bash 3.2):
+#   REPOS=(); while IFS= read -r r; do [ -n "$r" ] && REPOS+=("$r"); done \
+#     < <(get_core_repos)
 get_core_repos() {
   local lib_dir
   lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -833,7 +835,8 @@ get_core_repos() {
 # Print just the bare repo names (owner stripped) from the core allowlist.
 # Useful for membership tests against local clone directory names.
 #
-# Usage: mapfile -t NAMES < <(core_repo_names) || exit 1
+# Usage (portable): NAMES=(); while IFS= read -r n; do NAMES+=("$n"); done \
+#   < <(core_repo_names)
 core_repo_names() {
   get_core_repos | sed 's|^[^/]*/||'
 }

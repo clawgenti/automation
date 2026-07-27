@@ -26,22 +26,19 @@ LOOKBACK_LIMIT=200
 
 # get_repos -- emit the repos to measure, one "owner/name" per line.
 #
-# Today: an explicit list of repos under PR-review coverage.
-# FUTURE SEAM (kagenti/kagenti#1811 repository-tiers): once the org-level
-# `tier` Custom Property is stamped, replace the explicit list with the
-# Core-tier query below. The endpoint is already reachable with an org-member
-# token, but the property is currently unstamped (returns empty), so the
-# explicit list stays until #1811 lands:
+# Delegates to get_core_repos() (program-lib.sh), which reads the shared
+# allowlist at config/core-repos.txt, so PR-review coverage is defined in one
+# place shared with the scanner rather than hardcoded here.
+# FUTURE SEAM (rossoctl/rossoctl#1811 repository-tiers): once the org-level
+# `tier` Custom Property is stamped, the allowlist file can be replaced with the
+# Core-tier query below. The property is currently unstamped (returns empty) and
+# the token lacks the required scope, so the allowlist stays until #1811 lands:
 #
-#   gh_with_backoff api "orgs/kagenti/properties/values" \
+#   gh_with_backoff api "orgs/rossoctl/properties/values" \
 #     --jq '.[] | select(.properties[]? | .property_name=="tier" and .value=="core") | .repository_full_name'
 #
 get_repos() {
-  printf '%s\n' \
-    "rossoctl/rossoctl" \
-    "rossoctl/cortex" \
-    "rossoctl/automation" \
-    "rossoctl/agent-skills"
+  get_core_repos
 }
 
 # --- CLI args ---

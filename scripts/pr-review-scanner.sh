@@ -13,7 +13,21 @@ source "$SCRIPT_DIR/program-lib.sh"
 
 # --- Configuration ---
 BOT_USER="clawgenti"
-REPOS=("rossoctl/rossoctl" "rossoctl/cortex" "rossoctl/automation" "rossoctl/agent-skills")
+
+# Repo coverage comes from the shared allowlist (config/core-repos.txt) via
+# get_core_repos(). Build the array with a portable while-read loop (mapfile is
+# bash 4+, unavailable on macOS's bash 3.2). Fail loud rather than silently
+# scanning an empty set.
+REPOS=()
+while IFS= read -r repo_line; do
+  [ -n "$repo_line" ] && REPOS+=("$repo_line")
+done < <(get_core_repos)
+
+if [ "${#REPOS[@]}" -eq 0 ]; then
+  echo "ERROR: core repos allowlist is empty or could not be loaded" >&2
+  exit 1
+fi
+
 LABEL="ready-for-ai-review"
 REVIEW_MARKER="<!-- reviewed:"
 STALE_THRESHOLD_MIN=30
