@@ -52,6 +52,17 @@ if CORE_REPOS_FILE="$TEST_TMPDIR/empty.txt" get_core_repos >/dev/null 2>&1; then
   echo "FAIL get_core_repos should error on empty allowlist"; fail=1
 fi
 
+# --- is_core_repo: membership test against the allowlist (exact, whole-line) ---
+CORE_REPOS_FILE="$TEST_TMPDIR/good.txt" is_core_repo "rossoctl" \
+  || { echo "FAIL is_core_repo: rossoctl should be in allowlist"; fail=1; }
+if CORE_REPOS_FILE="$TEST_TMPDIR/good.txt" is_core_repo "not-a-repo"; then
+  echo "FAIL is_core_repo: not-a-repo should NOT match"; fail=1
+fi
+# Guard against substring false positives (rosso is a prefix of rossoctl).
+if CORE_REPOS_FILE="$TEST_TMPDIR/good.txt" is_core_repo "rosso"; then
+  echo "FAIL is_core_repo: partial 'rosso' must not match 'rossoctl'"; fail=1
+fi
+
 # --- canonical_repo_for_dir: remaps the two renamed dirs, identity otherwise ---
 [ "$(canonical_repo_for_dir kagenti)" = "rossoctl" ] \
   || { echo "FAIL canonical: kagenti -> rossoctl"; fail=1; }

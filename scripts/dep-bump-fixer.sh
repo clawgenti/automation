@@ -93,6 +93,7 @@ if [ ! -f "$REPORTS_DIR/baseline.json" ]; then
 
   # Query merged Dependabot PRs across all repos (last 90 days)
   : > "$TMPDIR/merged_prs.jsonl"
+  seen_canon=""
   for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
     [ -d "$repo_dir" ] || continue
     repo_name=$(basename "$repo_dir")
@@ -100,7 +101,17 @@ if [ ! -f "$REPORTS_DIR/baseline.json" ]; then
       continue
     fi
 
-    gh pr list --repo "$ORG/$repo_name" \
+    # Core-repo allowlist + canonical remap + dedup of duplicate clone dirs.
+    canon=$(canonical_repo_for_dir "$repo_name")
+    if ! is_core_repo "$canon"; then
+      continue
+    fi
+    case " $seen_canon " in
+      *" $canon "*) continue ;;
+    esac
+    seen_canon="$seen_canon $canon"
+
+    gh pr list --repo "rossoctl/$canon" \
       --author "app/dependabot" \
       --state merged \
       --json number,createdAt,mergedAt \
@@ -149,6 +160,7 @@ echo "--- Discovering scanner issues ---"
 : > "$TMPDIR/issues.jsonl"
 REPOS_CHECKED=0
 
+SEEN_CANON=""
 for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
   [ -d "$repo_dir" ] || continue
   repo_name=$(basename "$repo_dir")
@@ -156,8 +168,18 @@ for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
     continue
   fi
 
+  # Core-repo allowlist + canonical remap + dedup of duplicate clone dirs.
+  canon=$(canonical_repo_for_dir "$repo_name")
+  if ! is_core_repo "$canon"; then
+    continue
+  fi
+  case " $SEEN_CANON " in
+    *" $canon "*) continue ;;
+  esac
+  SEEN_CANON="$SEEN_CANON $canon"
+
   REPOS_CHECKED=$((REPOS_CHECKED + 1))
-  full_repo="$ORG/$repo_name"
+  full_repo="rossoctl/$canon"
 
   issues_json=$(gh issue list --repo "$full_repo" \
     --search "[dep-bump] in:title" \
@@ -514,6 +536,7 @@ echo "--- Computing metrics ---"
 
 # Query recently merged Dependabot PRs (last 30 days) for TTM
 : > "$TMPDIR/recent_merged.jsonl"
+SEEN_CANON_TTM=""
 for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
   [ -d "$repo_dir" ] || continue
   repo_name=$(basename "$repo_dir")
@@ -521,7 +544,17 @@ for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
     continue
   fi
 
-  gh pr list --repo "$ORG/$repo_name" \
+  # Core-repo allowlist + canonical remap + dedup of duplicate clone dirs.
+  canon=$(canonical_repo_for_dir "$repo_name")
+  if ! is_core_repo "$canon"; then
+    continue
+  fi
+  case " $SEEN_CANON_TTM " in
+    *" $canon "*) continue ;;
+  esac
+  SEEN_CANON_TTM="$SEEN_CANON_TTM $canon"
+
+  gh pr list --repo "rossoctl/$canon" \
     --author "app/dependabot" \
     --state merged \
     --json number,createdAt,mergedAt \

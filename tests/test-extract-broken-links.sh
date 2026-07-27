@@ -10,8 +10,9 @@ EXTRACTOR="$SCRIPT_DIR/../scripts/extract-broken-links.sh"
 TEST_TMPDIR=$(mktemp -d "/tmp/test-extract-broken-XXXXXX")
 trap 'rm -rf "$TEST_TMPDIR"' EXIT
 
-REPO="kagenti-extensions"
-REPOS_PREFIX="/home/claw/kagenti/kagenti-extensions/"
+# Arg 2 is now a full "owner/name" reference, emitted verbatim in .repo.
+REPO="rossoctl/cortex"
+REPOS_PREFIX="/home/claw/kagenti/cortex/"
 
 PASS=0
 FAIL=0
@@ -101,7 +102,7 @@ write_fixture "$TEST_TMPDIR/ext.json" \
 run_test "external record count" "$TEST_TMPDIR/ext.json" 'length' '1'
 run_test "external status normalized" "$TEST_TMPDIR/ext.json" '.[0].status' '404'
 run_test "external category" "$TEST_TMPDIR/ext.json" '.[0].category' 'external'
-run_test "external repo prefixed" "$TEST_TMPDIR/ext.json" '.[0].repo' 'kagenti/kagenti-extensions'
+run_test "external repo emitted verbatim" "$TEST_TMPDIR/ext.json" '.[0].repo' 'rossoctl/cortex'
 run_test "external file prefix stripped" "$TEST_TMPDIR/ext.json" '.[0].file' 'docs/d.md'
 run_test "external url preserved" "$TEST_TMPDIR/ext.json" '.[0].url' 'https://example.invalid/gone'
 

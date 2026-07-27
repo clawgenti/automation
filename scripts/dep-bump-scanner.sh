@@ -102,6 +102,7 @@ echo "--- Detecting ecosystems ---"
 : > "$TMPDIR/ecosystems.jsonl"
 REPOS_SCANNED=0
 
+SEEN_CANON=""
 for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
   [ -d "$repo_dir" ] || continue
   repo_name=$(basename "$repo_dir")
@@ -110,6 +111,17 @@ for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
   if [[ "$repo_name" == .* && "$repo_name" != ".github" ]] || [ ! -d "$repo_dir/.git" ]; then
     continue
   fi
+
+  # Restrict to core repos (allowlist) via the canonical name; dedup duplicate
+  # clone dirs so each canonical repo is processed once.
+  canon=$(canonical_repo_for_dir "$repo_name")
+  if ! is_core_repo "$canon"; then
+    continue
+  fi
+  case " $SEEN_CANON " in
+    *" $canon "*) continue ;;
+  esac
+  SEEN_CANON="$SEEN_CANON $canon"
 
   REPOS_SCANNED=$((REPOS_SCANNED + 1))
   ecosystems=""
@@ -147,7 +159,8 @@ for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
   # Strip trailing comma
   ecosystems="${ecosystems%,}"
 
-  jq -nc --arg repo "$repo_name" --arg eco "$ecosystems" \
+  # Store the canonical repo name so Step 2 builds correct rossoctl/<name> refs.
+  jq -nc --arg repo "$canon" --arg eco "$ecosystems" \
     '{repo: $repo, ecosystems: ($eco | split(",") | map(select(. != "")))}' \
     >> "$TMPDIR/ecosystems.jsonl"
 done
@@ -163,12 +176,14 @@ REPOS_WITH_DEPENDABOT=0
 TOTAL_OPEN_PRS=0
 
 while IFS= read -r eco_record; do
-  repo_name=$(echo "$eco_record" | jq -r '.repo')
-  full_repo="$ORG/$repo_name"
+  repo_name=$(echo "$eco_record" | jq -r '.repo')   # canonical name from Step 1
+  full_repo="rossoctl/$repo_name"
 
   echo "  Checking $repo_name..."
 
-  # List open Dependabot PRs
+  # List open Dependabot PRs. Query the canonical repo directly -- gh pr list
+  # with --author silently returns empty across a rename redirect, which is why
+  # the pre-rename names reported zero Dependabot PRs.
   prs_json=$(gh pr list --repo "$full_repo" \
     --author "app/dependabot" \
     --state open \
@@ -418,7 +433,8 @@ while IFS='|' read -r issue_repo issue_pr_number; do
   category=$(echo "$record" | jq -r '.category')
   overdue=$((age_days - sla_days))
 
-  full_repo="$ORG/$issue_repo"
+  # Record repos are canonical names (see Step 1); build canonical refs.
+  full_repo="rossoctl/$issue_repo"
 
   # Deduplication
   search_term="[dep-bump] Stale $severity bump: $package in $issue_repo"
@@ -497,7 +513,7 @@ ISSUES_CLOSED=0
 while IFS='|' read -r fix_repo fix_pr_number; do
   [ -z "$fix_repo" ] && continue
 
-  full_repo="$ORG/$fix_repo"
+  full_repo="rossoctl/$fix_repo"
 
   # Find matching open issue by searching for the PR number in title/body
   issue_number=$(gh issue list --repo "$full_repo" \
