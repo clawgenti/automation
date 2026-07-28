@@ -781,3 +781,83 @@ create_fork_pr() {
 
   echo "$pr_url"
 }
+
+# =============================================================================
+# REPO SELECTION
+# =============================================================================
+#
+# Single source of truth for which repos the programs act on. All programs
+# derive their repo set from config/core-repos.txt via get_core_repos(), so
+# coverage is defined in one place rather than hardcoded per script.
+#
+# The on-disk clone directories still carry pre-rename names (e.g. "kagenti",
+# "kagenti-extensions"), so scripts that iterate clones must map a directory
+# basename to its canonical repo via canonical_repo_for_dir() before building
+# an API reference. Never rely on the rename redirect for filtered `gh pr list`
+# queries (--label/--author silently return empty across a redirect).
+
+# Print the core repo allowlist, one "owner/name" per line.
+#
+# Reads config/core-repos.txt (comments starting with "#" and blank lines are
+# stripped). The file path is resolved relative to THIS library's location, not
+# the caller's, so it works no matter which script sources program-lib.sh.
+# Override with $CORE_REPOS_FILE (used by tests).
+#
+# Fails loud: if the file is missing or yields zero repos, prints an error to
+# stderr and returns 1 -- callers must never silently scan an empty repo set.
+#
+# Usage (portable; mapfile is bash 4+ and absent on macOS bash 3.2):
+#   REPOS=(); while IFS= read -r r; do [ -n "$r" ] && REPOS+=("$r"); done \
+#     < <(get_core_repos)
+get_core_repos() {
+  local lib_dir
+  lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local repos_file="${CORE_REPOS_FILE:-$lib_dir/../config/core-repos.txt}"
+
+  if [ ! -f "$repos_file" ]; then
+    echo "ERROR: core repos file not found: $repos_file" >&2
+    return 1
+  fi
+
+  # Strip comments (full-line and trailing), trim whitespace, drop blanks.
+  local repos
+  repos=$(sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' \
+    "$repos_file" | grep -v '^$' || true)
+
+  if [ -z "$repos" ]; then
+    echo "ERROR: core repos file is empty: $repos_file" >&2
+    return 1
+  fi
+
+  printf '%s\n' "$repos"
+}
+
+# Print just the bare repo names (owner stripped) from the core allowlist.
+# Useful for membership tests against local clone directory names.
+#
+# Usage (portable): NAMES=(); while IFS= read -r n; do NAMES+=("$n"); done \
+#   < <(core_repo_names)
+core_repo_names() {
+  get_core_repos | sed 's|^[^/]*/||'
+}
+
+# Map a local clone directory basename to its canonical bare repo name.
+#
+# Clone dirs may still use pre-rename names; this encapsulates the rename
+# remap table in one place so every script agrees. Unknown names pass through
+# unchanged (identity), so non-remapped repos need no special handling.
+#
+# Returns: the bare repo name only (e.g. "rossoctl"), NOT an owner/name pair.
+#          Prepend the owner to build a full API reference, e.g. "rossoctl/$canon".
+#
+# Usage: canon=$(canonical_repo_for_dir "$repo_dir_basename")
+# Args:
+#   $1 - clone directory basename (e.g. "kagenti", "cortex")
+canonical_repo_for_dir() {
+  local dir_name="$1"
+  case "$dir_name" in
+    kagenti)            echo "rossoctl" ;;
+    kagenti-extensions) echo "cortex" ;;
+    *)                  echo "$dir_name" ;;
+  esac
+}
