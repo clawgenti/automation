@@ -103,9 +103,21 @@ ACTIVATIONS_FILE="$WORK_DIR/activations.jsonl"  # one {repo, activation} per rep
 : > "$ALL_FILE"
 : > "$ACTIVATIONS_FILE"
 
+# Resolve the repo set once, up front, so a broken or empty allowlist fails loud
+# rather than producing a zero-repo report with exit 0. Portable while-read build
+# (mapfile is bash 4+, unavailable on macOS's bash 3.2), mirroring pr-review-scanner.
+REPOS=()
+while IFS= read -r repo_line; do
+  [ -n "$repo_line" ] && REPOS+=("$repo_line")
+done < <(get_repos)
+
+if [ "${#REPOS[@]}" -eq 0 ]; then
+  echo "ERROR: core repos allowlist is empty or could not be loaded" >&2
+  exit 1
+fi
+
 # --- Step 1: Per repo — find marked-reviewed PRs, derive activation, tag merged PRs ---
-while IFS= read -r repo; do
-  [ -z "$repo" ] && continue
+for repo in "${REPOS[@]}"; do
   [ "$VERBOSE" = true ] && echo "Processing $repo..." >&2
 
   # 1a. Prefilter: PRs clawgenti REVIEWED (not merely commented on). This drops
@@ -162,7 +174,7 @@ while IFS= read -r repo; do
            after_activation: (if $act == "" then null else (.createdAt >= $act) end)
          }' \
     >> "$ALL_FILE" 2>/dev/null || true
-done < <(get_repos)
+done
 
 # --- Step 2: Aggregate median TTM (HOURS, 1 decimal) per bucket across repos ---
 # Hours, not floored days: PRs here merge in hours, so day-floor collapses every
