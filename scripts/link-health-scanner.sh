@@ -63,6 +63,10 @@ REPOS_FAILED=0
 # Collect all broken links into a single JSONL file
 : > "$TMPDIR/broken.jsonl"
 
+# Track canonical repos already scanned this run, so duplicate clone dirs
+# (e.g. a stale "kagenti" alongside "rossoctl") are not scanned twice.
+SEEN_CANON=""
+
 for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
   [ -d "$repo_dir" ] || continue
   repo_name=$(basename "$repo_dir")
@@ -72,7 +76,20 @@ for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
     continue
   fi
 
-  echo "Scanning $repo_name..."
+  # Restrict to core repos (allowlist), mapping pre-rename dir names to their
+  # canonical repo first. Non-core / archived clones are skipped.
+  canon=$(canonical_repo_for_dir "$repo_name")
+  if ! is_core_repo "$canon"; then
+    continue
+  fi
+
+  # Dedup: skip if another clone dir already covered this canonical repo.
+  case " $SEEN_CANON " in
+    *" $canon "*) echo "Skipping $repo_name (already scanned as $canon)"; continue ;;
+  esac
+  SEEN_CANON="$SEEN_CANON $canon"
+
+  echo "Scanning $repo_name (as rossoctl/$canon)..."
 
   LYCHEE_OUTPUT="$TMPDIR/lychee_${repo_name}.json"
 
@@ -114,7 +131,7 @@ for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
   # normalization logic lives in extract-broken-links.sh so it can be unit-tested
   # (see tests/test-extract-broken-links.sh).
   "$SCRIPT_DIR/extract-broken-links.sh" \
-    "$LYCHEE_OUTPUT" "$repo_name" "$REPOS_DIR/$repo_name/" \
+    "$LYCHEE_OUTPUT" "rossoctl/$canon" "$REPOS_DIR/$repo_name/" \
     >> "$TMPDIR/broken.jsonl" 2>/dev/null || true
 
   echo "  Links: $repo_total, Errors: $repo_errors"

@@ -14,17 +14,18 @@ set -euo pipefail
 # here so it can be unit-tested against synthetic lychee fixtures.
 #
 # Usage:
-#   extract-broken-links.sh <lychee-json> <repo-name> <repos-prefix>
-#   cat report.json | extract-broken-links.sh - <repo-name> <repos-prefix>
+#   extract-broken-links.sh <lychee-json> <repo> <repos-prefix>
+#   cat report.json | extract-broken-links.sh - <repo> <repos-prefix>
 #
 # Arguments:
 #   <lychee-json>   Path to a lychee JSON report, or - to read from stdin.
-#   <repo-name>     Bare repo name (e.g. "kagenti"); emitted as "kagenti/<name>".
+#   <repo>          Full "owner/name" repo reference (e.g. "rossoctl/cortex");
+#                   emitted verbatim in the "repo" field.
 #   <repos-prefix>  Absolute path prefix stripped from lychee's file keys
-#                   (e.g. "/home/claw/kagenti/kagenti/").
+#                   (e.g. "/home/claw/kagenti/rossoctl/").
 #
 # Output (stdout): JSONL, zero or more objects of the form
-#   {"repo":"kagenti/foo","file":"docs/x.md","url":"https://...","status":"404","category":"external"}
+#   {"repo":"rossoctl/foo","file":"docs/x.md","url":"https://...","status":"404","category":"external"}
 #
 # Exit codes:
 #   0 - success (may emit zero records)
@@ -38,7 +39,7 @@ if [ $# -lt 3 ]; then
 fi
 
 LYCHEE_INPUT="$1"
-REPO_NAME="$2"
+REPO_FULL="$2"   # full "owner/name" reference, emitted verbatim
 REPOS_PREFIX="$3"
 
 if [ "$LYCHEE_INPUT" != "-" ] && [ ! -f "$LYCHEE_INPUT" ]; then
@@ -55,7 +56,7 @@ fi
 # Normalize lychee status to enum tokens: numeric codes stay as-is,
 # text statuses map to: timeout, dns, unreachable, error, unknown.
 # Suppress URLs with unreachable-by-design hostnames (cluster-local, .local, RFC1918).
-jq -r --arg repo "$REPO_NAME" --arg repos_dir "$REPOS_PREFIX" '
+jq -r --arg repo "$REPO_FULL" --arg repos_dir "$REPOS_PREFIX" '
   .error_map // {} | to_entries[] |
   .key as $filepath |
   .value[] |
@@ -79,7 +80,7 @@ jq -r --arg repo "$REPO_NAME" --arg repos_dir "$REPOS_PREFIX" '
     end
   ) as $status |
   {
-    repo: ("kagenti/" + $repo),
+    repo: $repo,
     file: ($filepath | ltrimstr($repos_dir) | ltrimstr("./")),
     url: .url,
     status: $status,

@@ -841,11 +841,34 @@ core_repo_names() {
   get_core_repos | sed 's|^[^/]*/||'
 }
 
+# Return 0 if the given bare repo name is in the core allowlist, else 1.
+#
+# Intended for filtering local clone iteration: pass the canonical name
+# (see canonical_repo_for_dir) so pre-rename clone dirs are matched correctly.
+# Uses an exact, whole-line match (grep -Fx) to avoid substring false positives.
+#
+# Usage:
+#   canon=$(canonical_repo_for_dir "$repo_name")
+#   is_core_repo "$canon" || continue
+# Args:
+#   $1 - bare repo name (no owner prefix)
+is_core_repo() {
+  local name="$1"
+  core_repo_names | grep -qxF "$name"
+}
+
 # Map a local clone directory basename to its canonical bare repo name.
 #
 # Clone dirs may still use pre-rename names; this encapsulates the rename
 # remap table in one place so every script agrees. Unknown names pass through
 # unchanged (identity), so non-remapped repos need no special handling.
+#
+# TRANSITIONAL: the non-identity entries below are a temporary bridge for the
+# kagenti->rossoctl rename while stale-named clone dirs still exist on disk.
+# Once clone dirs are renamed to canonical names, this function becomes pure
+# identity and the entries should be deleted. See rossoctl/automation#37.
+# It is a lookup table, not a rename detector -- do not treat it as protection
+# against future renames.
 #
 # Returns: the bare repo name only (e.g. "rossoctl"), NOT an owner/name pair.
 #          Prepend the owner to build a full API reference, e.g. "rossoctl/$canon".

@@ -60,6 +60,7 @@ echo "=== Step 1: Gathering open scanner issues ==="
 ISSUES_FILE="$TMPDIR/issues.jsonl"
 : > "$ISSUES_FILE"
 
+SEEN_CANON=""
 for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
   [ -d "$repo_dir" ] || continue
   repo_name=$(basename "$repo_dir")
@@ -67,7 +68,18 @@ for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
     continue
   fi
 
-  full_repo="$ORG/$repo_name"
+  # Restrict to core repos (allowlist), mapping pre-rename dir names first;
+  # dedup so duplicate clone dirs for the same canonical repo run once.
+  canon=$(canonical_repo_for_dir "$repo_name")
+  if ! is_core_repo "$canon"; then
+    continue
+  fi
+  case " $SEEN_CANON " in
+    *" $canon "*) continue ;;
+  esac
+  SEEN_CANON="$SEEN_CANON $canon"
+
+  full_repo="rossoctl/$canon"
 
   issues_json=$(gh issue list --repo "$full_repo" \
     --search "Broken link in:title" \
