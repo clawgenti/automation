@@ -93,7 +93,7 @@ if [ ! -f "$REPORTS_DIR/baseline.json" ]; then
 
   # Query merged Dependabot PRs across all repos (last 90 days)
   : > "$TMPDIR/merged_prs.jsonl"
-  seen_canon=""
+  SEEN_CANON=""
   for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
     [ -d "$repo_dir" ] || continue
     repo_name=$(basename "$repo_dir")
@@ -106,10 +106,10 @@ if [ ! -f "$REPORTS_DIR/baseline.json" ]; then
     if ! is_core_repo "$canon"; then
       continue
     fi
-    case " $seen_canon " in
+    case " $SEEN_CANON " in
       *" $canon "*) continue ;;
     esac
-    seen_canon="$seen_canon $canon"
+    SEEN_CANON="$SEEN_CANON $canon"
 
     gh pr list --repo "rossoctl/$canon" \
       --author "app/dependabot" \
