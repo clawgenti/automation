@@ -37,7 +37,7 @@ gh auth status  # confirm you're authenticated
 ### 1. Clone this repo
 
 ```bash
-git clone git@github.com:kagenti/automation.git
+git clone git@github.com:rossoctl/automation.git
 cd automation
 ```
 
@@ -46,10 +46,10 @@ cd automation
 The scripts expect all org repos to live in a single directory. Clone them:
 
 ```bash
-mkdir -p ~/kagenti
-gh repo list kagenti --limit 100 --json name --jq '.[].name' | while read -r repo; do
-  if [ ! -d "$HOME/kagenti/$repo" ]; then
-    gh repo clone "kagenti/$repo" "$HOME/kagenti/$repo"
+mkdir -p ~/rossoctl
+gh repo list rossoctl --limit 100 --json name --jq '.[].name' | while read -r repo; do
+  if [ ! -d "$HOME/rossoctl/$repo" ]; then
+    gh repo clone "rossoctl/$repo" "$HOME/rossoctl/$repo"
   fi
 done
 ```
@@ -57,7 +57,7 @@ done
 To keep them fresh (optional -- run before each scan):
 
 ```bash
-for dir in ~/kagenti/*/; do
+for dir in ~/rossoctl/*/; do
   git -C "$dir" pull --ff-only 2>/dev/null || true
 done
 ```
@@ -71,7 +71,7 @@ mkdir -p ~/reports/link-scan
 ### 4. Configure environment
 
 ```bash
-export REPOS_DIR="$HOME/kagenti"
+export REPOS_DIR="$HOME/rossoctl"
 export REPORTS_DIR="$HOME/reports/link-scan"
 ```
 
@@ -134,10 +134,10 @@ Claude Code can also interpret the output and take follow-up actions (e.g., "run
 crontab -e
 
 # Scanner: Mon/Wed/Fri at 11:00 UTC
-0 11 * * 1,3,5 cd ~/automation && REPOS_DIR=~/kagenti REPORTS_DIR=~/reports/link-scan bash scripts/link-health-scanner.sh >> ~/logs/scanner.log 2>&1
+0 11 * * 1,3,5 cd ~/automation && REPOS_DIR=~/rossoctl REPORTS_DIR=~/reports/link-scan bash scripts/link-health-scanner.sh >> ~/logs/scanner.log 2>&1
 
 # Fixer: Tue/Thu at 14:00 UTC
-0 14 * * 2,4 cd ~/automation && REPOS_DIR=~/kagenti REPORTS_DIR=~/reports/link-scan bash scripts/link-health-fixer.sh --live >> ~/logs/fixer.log 2>&1
+0 14 * * 2,4 cd ~/automation && REPOS_DIR=~/rossoctl REPORTS_DIR=~/reports/link-scan bash scripts/link-health-fixer.sh --live >> ~/logs/fixer.log 2>&1
 ```
 
 ### GitHub Actions (CI-based)
@@ -164,6 +164,6 @@ To run against a different GitHub org:
 
 1. Clone that org's repos into `$REPOS_DIR`
 2. Edit `FORK_OWNER` in the fixer (or set it as an env var)
-3. Edit `ORG="kagenti"` in the fixer to your org name
+3. Edit `ORG="rossoctl"` in the fixer to your org name
 4. Update DCO identity in the fixer (`GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL`)
 5. Run the scanner -- it will detect broken links and create issues in the target repos

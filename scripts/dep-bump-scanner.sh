@@ -2,14 +2,14 @@
 set -euo pipefail
 
 # =============================================================================
-# Dependency Bump Scanner — kagenti org
+# Dependency Bump Scanner — rossoctl org
 # Monitors Dependabot PRs, classifies by severity, flags SLA breaches,
 # creates/closes GitHub issues, writes reports.
 #
 # Usage:
 #   bash dep-bump-scanner.sh --help
 #   bash dep-bump-scanner.sh --dry-run
-#   bash dep-bump-scanner.sh --dry-run --org kagenti
+#   bash dep-bump-scanner.sh --dry-run --org rossoctl
 #   bash dep-bump-scanner.sh --issue-limit 3
 # =============================================================================
 
@@ -21,7 +21,7 @@ source "$SCRIPT_DIR/program-lib.sh"
 # --- CLI args ---
 DRY_RUN=false
 ISSUE_LIMIT=0  # 0 = unlimited
-ORG="kagenti"
+ORG="rossoctl"  # display/report-tag only; repo reads use canonical rossoctl/<name> (see get_core_repos)
 SHOW_HELP=false
 
 while [[ $# -gt 0 ]]; do
@@ -44,7 +44,7 @@ USAGE:
 OPTIONS:
   --dry-run         Scan and report only; do not create/close issues
   --issue-limit N   Create at most N issues per run (0 = unlimited)
-  --org NAME        GitHub org to scan (default: kagenti)
+  --org NAME        GitHub org to scan (default: rossoctl)
   --help, -h        Show this help
 
 ENVIRONMENT:
