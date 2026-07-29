@@ -1,6 +1,6 @@
 # OpenClaw Program Template
 
-A **program** is a pair of automated scripts (scanner + fixer) that detect problems across the kagenti GitHub org, create issues for them, and resolve them via PRs or comments.
+A **program** is a pair of automated scripts (scanner + fixer) that detect problems across the rossoctl GitHub org, create issues for them, and resolve them via PRs or comments.
 
 ```
 Scanner (cheap model, frequent)  -->  GitHub Issues  -->  Fixer (expensive model, less frequent)
@@ -16,7 +16,7 @@ This document defines the contracts a program must follow so that the shared inf
 ## 1. Directory Layout
 
 ```
-automation/                         # kagenti/automation repo (source of truth)
+automation/                         # rossoctl/automation repo (source of truth)
 ├── scripts/
 │   ├── <program>-scanner.sh        # Scanner script
 │   └── <program>-fixer.sh          # Fixer script
@@ -36,7 +36,7 @@ reports/<program>/                  # Runtime data (not versioned)
 └── <program-specific>.json         # Optional auxiliary files (e.g., fixer-ambiguous.json)
 ```
 
-Shared repo mirrors live at `~/kagenti/` on the remote host, updated nightly by a separate cron job. Programs read from these -- they do not clone repos themselves.
+Shared repo mirrors live at `~/rossoctl/` on the remote host, updated nightly by a separate cron job. Programs read from these -- they do not clone repos themselves.
 
 ---
 
@@ -80,7 +80,7 @@ Options:
   "total_items_checked": 5000,
   "<findings_key>": [
     {
-      "repo": "kagenti/adk",
+      "repo": "rossoctl/cortex",
       "<program-specific fields>": "...",
       "category": "<program-defined classification>",
       "issue_number": null,
@@ -264,7 +264,7 @@ When deterministic logic finds multiple valid candidates, write the item to an a
 [
   {
     "issue_number": 123,
-    "repo": "kagenti/adk",
+    "repo": "rossoctl/cortex",
     "broken_url": "...",
     "reason": "multiple_candidates",
     "candidates": ["path/a.md", "path/b.md"]
@@ -295,7 +295,7 @@ The title must be unique enough for deduplication via `gh issue list --search`.
 
 <One-line description of the problem detected by automated scan.>
 
-**Repo:** kagenti/<repo_name>
+**Repo:** rossoctl/<repo_name>
 **File:** <relative/path/to/file>
 **<Problem-specific field>:** <value>
 **<Status/severity field>:** <value>
@@ -425,7 +425,7 @@ Each program gets a file in `standing-orders/<program>.md`:
 - Cron job: `<name>` (<schedule>)
 - Reports: `reports/<program>/`
 - Manual run: `openclaw cron run <job-name>`
-- Epic: kagenti/kagenti#<number>
+- Epic: rossoctl/rossoctl#<number>
 ```
 
 ---
@@ -484,4 +484,4 @@ metadata: {"openclaw": {"requires": {"bins": ["<tool1>", "gh", "jq"]}}}
 8. Create `reports/<program>/` directory on remote host
 9. Register cron jobs in `~/.openclaw/cron/jobs.json` (restart gateway after)
 10. Verify cron delivery end-to-end (Discord)
-11. Commit all files to `kagenti/automation` repo
+11. Commit all files to `rossoctl/automation` repo
