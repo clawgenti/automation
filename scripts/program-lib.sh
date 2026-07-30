@@ -810,6 +810,12 @@ create_fork_pr() {
 #
 # Sets (caller should treat as exported): ORG FORK_OWNER MAIN_REPO REPOS_DIR REMAP
 # Fails loud: missing profile file -> return 1; unresolvable ORG -> hard error.
+#
+# Only ORG has no built-in default (it must be resolved from flag/env/profile).
+# The other facts fall back to sensible defaults derived from ORG, except
+# FORK_OWNER, whose built-in fallback "clawgenti" is the rossoctl deployment's
+# fork account. Any other org should set PROFILE_FORK_OWNER in its profile
+# (config/org.env sets it explicitly) rather than rely on that fallback.
 load_org_profile() {
   local lib_dir profile_file name
   lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
