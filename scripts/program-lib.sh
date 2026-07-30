@@ -849,18 +849,28 @@ load_org_profile() {
 
 # Print the core repo allowlist, one "owner/name" per line.
 #
-# Reads config/core-repos.txt (comments starting with "#" and blank lines are
-# stripped). The file path is resolved relative to THIS library's location, not
-# the caller's, so it works no matter which script sources program-lib.sh.
+# Reads config/core-repos.txt, which holds BARE repo names (comments starting
+# with "#" and blank lines are stripped). The owner is derived by prepending
+# the loaded $ORG, so the same list works for any org the suite targets. Call
+# load_org_profile (or otherwise set ORG) before this function.
+#
+# The file path is resolved relative to THIS library's location, not the
+# caller's, so it works no matter which script sources program-lib.sh.
 # Override with $CORE_REPOS_FILE (used by tests).
 #
-# Fails loud: if the file is missing or yields zero repos, prints an error to
-# stderr and returns 1 -- callers must never silently scan an empty repo set.
+# Fails loud: if ORG is unset, or the file is missing or yields zero repos,
+# prints an error to stderr and returns 1 -- callers must never silently scan
+# an empty repo set or emit ownerless refs.
 #
 # Usage (portable; mapfile is bash 4+ and absent on macOS bash 3.2):
 #   REPOS=(); while IFS= read -r r; do [ -n "$r" ] && REPOS+=("$r"); done \
 #     < <(get_core_repos)
 get_core_repos() {
+  if [ -z "${ORG:-}" ]; then
+    echo "ERROR: ORG is unset; call load_org_profile before get_core_repos" >&2
+    return 1
+  fi
+
   local lib_dir
   lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   local repos_file="${CORE_REPOS_FILE:-$lib_dir/../config/core-repos.txt}"
@@ -880,7 +890,13 @@ get_core_repos() {
     return 1
   fi
 
-  printf '%s\n' "$repos"
+  # Prepend the loaded org to each bare name.
+  local line
+  while IFS= read -r line; do
+    [ -n "$line" ] && printf '%s/%s\n' "$ORG" "$line"
+  done <<EOF
+$repos
+EOF
 }
 
 # Print just the bare repo names (owner stripped) from the core allowlist.
