@@ -94,21 +94,45 @@ load_org_profile() {
     return 1
   fi
 
-  # 2. source it, capturing values into PROFILE_* vars (must not clobber
-  #    already-set env; the profile provides defaults, not overrides)
+  # 2. source it. The profile file defines PROFILE_-PREFIXED names ONLY
+  #    (PROFILE_ORG, PROFILE_FORK_OWNER, ...), never the bare resolved names.
+  #    This is what makes sourcing safe: it cannot clobber an env-provided ORG
+  #    before the precedence block runs. See "Profile capture mechanism" below.
+  # shellcheck source=/dev/null
+  source "$profile_file"
 
   # 3. resolve each fact by precedence: flag > env > profile > builtin default
   ORG="${ORG_FLAG:-${ORG:-${PROFILE_ORG:-}}}"
   : "${ORG:?ERROR: ORG could not be resolved (flag/env/profile all empty)}"
   FORK_OWNER="${FORK_OWNER_FLAG:-${FORK_OWNER:-${PROFILE_FORK_OWNER:-clawgenti}}}"
   MAIN_REPO="${MAIN_REPO_FLAG:-${MAIN_REPO:-${PROFILE_MAIN_REPO:-$ORG/$ORG}}}"
-  REPOS_DIR="${REPOS_DIR:-${PROFILE_REPOS_DIR:-$HOME/$ORG}}"
+  REPOS_DIR="${REPOS_DIR_FLAG:-${REPOS_DIR:-${PROFILE_REPOS_DIR:-$HOME/$ORG}}}"
   REMAP="${PROFILE_REMAP:-}"
 }
 ```
 
 Note: the default profile file is `config/org.env` (not `config/org.org.env`); the `.` + name suffix
 is only added when a profile name is explicitly given.
+
+### Profile capture mechanism
+
+The precedence rule requires that an env-provided value beats the profile. If the profile file
+contained a bare `ORG=rossoctl`, `source`-ing it would set `ORG` **directly** — clobbering any
+env-provided `ORG` *before* the precedence block runs, silently inverting "env > profile". To make
+that impossible by construction, **the profile file assigns only `PROFILE_`-prefixed names**:
+
+```sh
+# config/org.env  (default profile)
+PROFILE_ORG=rossoctl
+PROFILE_FORK_OWNER=clawgenti
+PROFILE_MAIN_REPO=rossoctl/rossoctl      # optional; defaults to $ORG/$ORG
+PROFILE_REPOS_DIR=${HOME}/rossoctl       # optional; defaults to $HOME/$ORG
+PROFILE_REMAP="kagenti:rossoctl kagenti-extensions:cortex"   # transitional; see #37
+```
+
+Sourcing this file can only ever set `PROFILE_*` variables, never the resolved `ORG`/`FORK_OWNER`/…
+that a flag or env var may already hold. The precedence block then reads `PROFILE_ORG` etc. as the
+lowest-but-one tier. No subshell or env snapshotting is needed.
 
 ### Precedence
 
@@ -118,6 +142,15 @@ The profile provides defaults; existing flags and env vars still win. This is wh
 host runs working unchanged during migration (the host sets `REPOS_DIR=~/kagenti` and passes flags;
 both continue to take effect). A later cleanup could make the profile authoritative or remove flags,
 but that is out of scope here.
+
+**Flag-tier scope.** The full four-tier chain applies to the facts that have a CLI flag:
+`ORG` (`--org`), `FORK_OWNER` (`--fork-owner`), `MAIN_REPO` (`--main-repo`), and `REPOS_DIR`
+(`--repos-dir`, added by this work — a durable, real knob). `REMAP` is deliberately **profile-only**
+(no env or flag tier): it is transitional, self-retires once host clone dirs are renamed (`#37`), so
+a `--remap` flag would be throwaway CLI surface. Not every script defines every flag — a script only
+adds the flags for facts it actually consumes (e.g. a read-only scanner needs no `--fork-owner`);
+the loader resolves each fact from whichever tiers are present, and an absent `*_FLAG` simply falls
+through to the env/profile/default tiers.
 
 ### Two helpers become profile-driven
 
@@ -143,11 +176,11 @@ alias** (emits a warning, still works) for one release so host cron does not bre
    selection            │   config/org.env         (default profile) │
    ┌──────────────┐     │   config/org.<name>.env  (--profile <name>)│
    │ --profile /  │────▶│   ┌─────────────────────────────────────┐  │
-   │ $ORG_PROFILE │     │   │ ORG=rossoctl                        │  │
-   └──────────────┘     │   │ FORK_OWNER=clawgenti                │  │
-                        │   │ MAIN_REPO=rossoctl/rossoctl         │  │
-                        │   │ REPOS_DIR=$HOME/rossoctl            │  │
-                        │   │ REMAP="kagenti:rossoctl \           │  │
+   │ $ORG_PROFILE │     │   │ PROFILE_ORG=rossoctl                │  │
+   └──────────────┘     │   │ PROFILE_FORK_OWNER=clawgenti        │  │
+                        │   │ PROFILE_MAIN_REPO=rossoctl/rossoctl │  │
+                        │   │ PROFILE_REPOS_DIR=$HOME/rossoctl    │  │
+                        │   │ PROFILE_REMAP="kagenti:rossoctl \   │  │
                         │   │        kagenti-extensions:cortex"   │  │ ◀── transitional,
                         │   └─────────────────────────────────────┘  │     delete post-#37
                         │                                             │
