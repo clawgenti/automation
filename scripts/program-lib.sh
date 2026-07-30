@@ -808,7 +808,9 @@ create_fork_pr() {
 # Callers may pre-set *_FLAG vars from their own arg parsing (ORG_FLAG,
 # FORK_OWNER_FLAG, MAIN_REPO_FLAG, REPOS_DIR_FLAG) and env vars (ORG, ...).
 #
-# Sets (caller should treat as exported): ORG FORK_OWNER MAIN_REPO REPOS_DIR REMAP
+# Sets (caller should treat as exported): ORG FORK_OWNER MAIN_REPO REPOS_DIR REMAP.
+# The first four honor the full flag > env > profile > default precedence; REMAP
+# is profile-only (see note at its assignment below).
 # Fails loud: missing profile file -> return 1; unresolvable ORG -> hard error.
 #
 # Only ORG has no built-in default (it must be resolved from flag/env/profile).
@@ -848,6 +850,9 @@ load_org_profile() {
   FORK_OWNER="${FORK_OWNER_FLAG:-${FORK_OWNER:-${PROFILE_FORK_OWNER:-clawgenti}}}"
   MAIN_REPO="${MAIN_REPO_FLAG:-${MAIN_REPO:-${PROFILE_MAIN_REPO:-$ORG/$ORG}}}"
   REPOS_DIR="${REPOS_DIR_FLAG:-${REPOS_DIR:-${PROFILE_REPOS_DIR:-$HOME/$ORG}}}"
+  # REMAP is profile-only by design (no flag/env tier): it is a transitional
+  # field that self-retires once clone dirs are renamed (rossoctl/automation#37),
+  # so it never earns a durable --flag/env knob. An exported REMAP is ignored.
   REMAP="${PROFILE_REMAP:-}"
 
   export ORG FORK_OWNER MAIN_REPO REPOS_DIR REMAP
@@ -955,6 +960,7 @@ is_core_repo() {
 canonical_repo_for_dir() {
   local dir_name="$1"
   local pair basename_part canon_part
+  # shellcheck disable=SC2086 -- intentional word-split on space-separated pairs
   for pair in ${REMAP:-}; do
     basename_part="${pair%%:*}"
     canon_part="${pair#*:}"
