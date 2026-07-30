@@ -5,11 +5,8 @@ set -euo pipefail
 #   - resolves each fact by precedence: flag > env > profile > default
 #   - PROFILE_-prefixed profile files cannot clobber env-provided values
 #   - fails loud on missing profile and unresolvable ORG
-# Hermetic: points the loader at fixture profiles via $ORG_PROFILE + a
-# temp config dir is not needed because the loader resolves the profile
-# path relative to program-lib.sh; instead we drive it with PROFILE_* env
-# by sourcing fixture files directly is avoided — we use $ORG_PROFILE against
-# fixtures placed next to the real config.
+# Hermetic: each test drives load_org_profile via $ORG_PROFILE_FILE pointing
+# at a temp fixture, so the real config/ files are never read.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
