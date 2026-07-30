@@ -796,6 +796,57 @@ create_fork_pr() {
 # an API reference. Never rely on the rename redirect for filtered `gh pr list`
 # queries (--label/--author silently return empty across a redirect).
 
+# Load org identity from a profile file and resolve each fact by precedence:
+#   --flag > env var > profile value > built-in default.
+#
+# The profile file assigns ONLY PROFILE_-prefixed names (PROFILE_ORG, ...),
+# so sourcing it can never clobber an env-provided ORG before resolution.
+#
+# Profile selection: $ORG_PROFILE_FILE (absolute path, used by tests) wins;
+# else --profile/$ORG_PROFILE names config/org.<name>.env; else config/org.env.
+#
+# Callers may pre-set *_FLAG vars from their own arg parsing (ORG_FLAG,
+# FORK_OWNER_FLAG, MAIN_REPO_FLAG, REPOS_DIR_FLAG) and env vars (ORG, ...).
+#
+# Sets (caller should treat as exported): ORG FORK_OWNER MAIN_REPO REPOS_DIR REMAP
+# Fails loud: missing profile file -> return 1; unresolvable ORG -> hard error.
+load_org_profile() {
+  local lib_dir profile_file name
+  lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  if [ -n "${ORG_PROFILE_FILE:-}" ]; then
+    profile_file="$ORG_PROFILE_FILE"
+  else
+    name="${PROFILE_FLAG:-${ORG_PROFILE:-}}"
+    if [ -n "$name" ]; then
+      profile_file="$lib_dir/../config/org.$name.env"
+    else
+      profile_file="$lib_dir/../config/org.env"
+    fi
+  fi
+
+  if [ ! -f "$profile_file" ]; then
+    echo "ERROR: org profile not found: $profile_file" >&2
+    return 1
+  fi
+
+  # Safe to source: file sets only PROFILE_* names.
+  # shellcheck source=/dev/null
+  . "$profile_file"
+
+  ORG="${ORG_FLAG:-${ORG:-${PROFILE_ORG:-}}}"
+  if [ -z "$ORG" ]; then
+    echo "ERROR: ORG could not be resolved (flag/env/profile all empty)" >&2
+    return 1
+  fi
+  FORK_OWNER="${FORK_OWNER_FLAG:-${FORK_OWNER:-${PROFILE_FORK_OWNER:-clawgenti}}}"
+  MAIN_REPO="${MAIN_REPO_FLAG:-${MAIN_REPO:-${PROFILE_MAIN_REPO:-$ORG/$ORG}}}"
+  REPOS_DIR="${REPOS_DIR_FLAG:-${REPOS_DIR:-${PROFILE_REPOS_DIR:-$HOME/$ORG}}}"
+  REMAP="${PROFILE_REMAP:-}"
+
+  export ORG FORK_OWNER MAIN_REPO REPOS_DIR REMAP
+}
+
 # Print the core repo allowlist, one "owner/name" per line.
 #
 # Reads config/core-repos.txt (comments starting with "#" and blank lines are
