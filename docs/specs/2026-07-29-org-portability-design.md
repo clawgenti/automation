@@ -2,8 +2,7 @@
 
 **Date:** 2026-07-29
 **Status:** Design (awaiting review)
-**Related:** epic `rossoctl/automation#32` (rename cleanup), `#31` (Phase 6), `#30`, `#35`
-(lib decomposition), `#37` (host clone-dir rename), `#39` (repo-onboarding skill)
+**Related:** epic `rossoctl/automation#32` (rename cleanup), `#31` (Phase 6), `#30`, `#35` (lib decomposition), `#37` (host clone-dir rename), `#39` (repo-onboarding skill)
 
 ## Problem
 
