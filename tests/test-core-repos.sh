@@ -74,14 +74,19 @@ if ORG=rossoctl CORE_REPOS_FILE="$TEST_TMPDIR/good.txt" is_core_repo "rosso"; th
   echo "FAIL is_core_repo: partial 'rosso' must not match 'rossoctl'"; fail=1
 fi
 
-# --- canonical_repo_for_dir: remaps the two renamed dirs, identity otherwise ---
+# --- canonical_repo_for_dir: reads $REMAP; identity when unset or no match ---
+REMAP="kagenti:rossoctl kagenti-extensions:cortex"
 [ "$(canonical_repo_for_dir kagenti)" = "rossoctl" ] \
   || { echo "FAIL canonical: kagenti -> rossoctl"; fail=1; }
 [ "$(canonical_repo_for_dir kagenti-extensions)" = "cortex" ] \
   || { echo "FAIL canonical: kagenti-extensions -> cortex"; fail=1; }
 [ "$(canonical_repo_for_dir automation)" = "automation" ] \
-  || { echo "FAIL canonical: automation identity"; fail=1; }
+  || { echo "FAIL canonical: automation identity (no match)"; fail=1; }
 [ "$(canonical_repo_for_dir operator)" = "operator" ] \
-  || { echo "FAIL canonical: operator identity"; fail=1; }
+  || { echo "FAIL canonical: operator identity (no match)"; fail=1; }
+# Empty REMAP => pure identity (proves the map is data, not a hardcoded case).
+REMAP="" ; [ "$(canonical_repo_for_dir kagenti)" = "kagenti" ] \
+  || { echo "FAIL canonical: empty REMAP is identity"; fail=1; }
+unset REMAP
 
 [ "$fail" -eq 0 ] && echo "PASS: core-repos helpers (parse, names, fail-loud, canonical remap)" || exit 1

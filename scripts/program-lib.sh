@@ -926,28 +926,42 @@ is_core_repo() {
 
 # Map a local clone directory basename to its canonical bare repo name.
 #
-# Clone dirs may still use pre-rename names; this encapsulates the rename
-# remap table in one place so every script agrees. Unknown names pass through
+# Clone dirs may still use pre-rename names; the remap table lives in the org
+# profile's $REMAP (format: space-separated "basename:canonical" pairs, set by
+# load_org_profile), so every script agrees and the mapping is data, not code.
+# An empty $REMAP makes this pure identity; unknown names pass through
 # unchanged (identity), so non-remapped repos need no special handling.
 #
-# TRANSITIONAL: the non-identity entries below are a temporary bridge for the
-# kagenti->rossoctl rename while stale-named clone dirs still exist on disk.
-# Once clone dirs are renamed to canonical names, this function becomes pure
-# identity and the entries should be deleted. See rossoctl/automation#37.
-# It is a lookup table, not a rename detector -- do not treat it as protection
-# against future renames.
+# TRANSITIONAL: $REMAP is a temporary bridge for the kagenti->rossoctl rename
+# while stale-named clone dirs still exist on disk. Once clone dirs are renamed
+# to canonical names, the PROFILE_REMAP line is deleted and this becomes pure
+# identity. See rossoctl/automation#37. It is a lookup table, not a rename
+# detector -- do not treat it as protection against future renames.
+#
+# A malformed entry (no colon) is skipped with a warning, non-fatal.
 #
 # Returns: the bare repo name only (e.g. "rossoctl"), NOT an owner/name pair.
-#          Prepend the owner to build a full API reference, e.g. "rossoctl/$canon".
+#          Prepend the owner to build a full API reference, e.g. "$ORG/$canon".
 #
 # Usage: canon=$(canonical_repo_for_dir "$repo_dir_basename")
 # Args:
 #   $1 - clone directory basename (e.g. "kagenti", "cortex")
 canonical_repo_for_dir() {
   local dir_name="$1"
-  case "$dir_name" in
-    kagenti)            echo "rossoctl" ;;
-    kagenti-extensions) echo "cortex" ;;
-    *)                  echo "$dir_name" ;;
-  esac
+  local pair basename_part canon_part
+  for pair in ${REMAP:-}; do
+    basename_part="${pair%%:*}"
+    canon_part="${pair#*:}"
+    if [ -z "$basename_part" ] || [ "$basename_part" = "$pair" ]; then
+      # Malformed entry (no colon) -- skip with a warning, non-fatal.
+      echo "WARN: ignoring malformed REMAP entry: $pair" >&2
+      continue
+    fi
+    if [ "$dir_name" = "$basename_part" ]; then
+      echo "$canon_part"
+      return 0
+    fi
+  done
+  # No match (or empty REMAP): identity.
+  echo "$dir_name"
 }
