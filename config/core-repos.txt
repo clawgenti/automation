@@ -1,8 +1,9 @@
 # Core repositories under automation coverage (scanner/fixer programs).
 #
-# One "owner/name" per line. Blank lines and lines starting with "#" are ignored.
-# Read via get_core_repos() in scripts/program-lib.sh; all programs derive their
-# repo set from this file so coverage is defined in one place.
+# Bare repo names, one per line. The owner is derived from the loaded ORG
+# (see load_org_profile / get_core_repos in scripts/program-lib.sh), so this
+# same list works for any org the suite is pointed at. Blank lines and lines
+# starting with "#" are ignored.
 #
 # Scope: the curated "core" repos that carry a real maintenance commitment.
 # Archived and non-core repos are intentionally excluded (excluding archived
@@ -12,11 +13,11 @@
 # rossoctl/rossoctl#1811), this list can be replaced by a live query for
 # tier=core. Until then, this explicit allowlist is the source of truth.
 
-rossoctl/rossoctl
-rossoctl/automation
-rossoctl/agent-skills
-rossoctl/.github
-rossoctl/cortex
-rossoctl/examples
-rossoctl/operator
-rossoctl/workload-harness
+rossoctl
+automation
+agent-skills
+.github
+cortex
+examples
+operator
+workload-harness

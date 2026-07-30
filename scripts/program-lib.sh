@@ -796,20 +796,92 @@ create_fork_pr() {
 # an API reference. Never rely on the rename redirect for filtered `gh pr list`
 # queries (--label/--author silently return empty across a redirect).
 
+# Load org identity from a profile file and resolve each fact by precedence:
+#   --flag > env var > profile value > built-in default.
+#
+# The profile file assigns ONLY PROFILE_-prefixed names (PROFILE_ORG, ...),
+# so sourcing it can never clobber an env-provided ORG before resolution.
+#
+# Profile selection: $ORG_PROFILE_FILE (absolute path, used by tests) wins;
+# else --profile/$ORG_PROFILE names config/org.<name>.env; else config/org.env.
+#
+# Callers may pre-set *_FLAG vars from their own arg parsing (ORG_FLAG,
+# FORK_OWNER_FLAG, MAIN_REPO_FLAG, REPOS_DIR_FLAG) and env vars (ORG, ...).
+#
+# Sets (caller should treat as exported): ORG FORK_OWNER MAIN_REPO REPOS_DIR REMAP.
+# The first four honor the full flag > env > profile > default precedence; REMAP
+# is profile-only (see note at its assignment below).
+# Fails loud: missing profile file -> return 1; unresolvable ORG -> hard error.
+#
+# Only ORG has no built-in default (it must be resolved from flag/env/profile).
+# The other facts fall back to sensible defaults derived from ORG, except
+# FORK_OWNER, whose built-in fallback "clawgenti" is the rossoctl deployment's
+# fork account. Any other org should set PROFILE_FORK_OWNER in its profile
+# (config/org.env sets it explicitly) rather than rely on that fallback.
+load_org_profile() {
+  local lib_dir profile_file name
+  lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  if [ -n "${ORG_PROFILE_FILE:-}" ]; then
+    profile_file="$ORG_PROFILE_FILE"
+  else
+    name="${PROFILE_FLAG:-${ORG_PROFILE:-}}"
+    if [ -n "$name" ]; then
+      profile_file="$lib_dir/../config/org.$name.env"
+    else
+      profile_file="$lib_dir/../config/org.env"
+    fi
+  fi
+
+  if [ ! -f "$profile_file" ]; then
+    echo "ERROR: org profile not found: $profile_file" >&2
+    return 1
+  fi
+
+  # Safe to source: file sets only PROFILE_* names.
+  # shellcheck source=/dev/null
+  . "$profile_file"
+
+  ORG="${ORG_FLAG:-${ORG:-${PROFILE_ORG:-}}}"
+  if [ -z "$ORG" ]; then
+    echo "ERROR: ORG could not be resolved (flag/env/profile all empty)" >&2
+    return 1
+  fi
+  FORK_OWNER="${FORK_OWNER_FLAG:-${FORK_OWNER:-${PROFILE_FORK_OWNER:-clawgenti}}}"
+  MAIN_REPO="${MAIN_REPO_FLAG:-${MAIN_REPO:-${PROFILE_MAIN_REPO:-$ORG/$ORG}}}"
+  REPOS_DIR="${REPOS_DIR_FLAG:-${REPOS_DIR:-${PROFILE_REPOS_DIR:-$HOME/$ORG}}}"
+  # REMAP is profile-only by design (no flag/env tier): it is a transitional
+  # field that self-retires once clone dirs are renamed (rossoctl/automation#37),
+  # so it never earns a durable --flag/env knob. An exported REMAP is ignored.
+  REMAP="${PROFILE_REMAP:-}"
+
+  export ORG FORK_OWNER MAIN_REPO REPOS_DIR REMAP
+}
+
 # Print the core repo allowlist, one "owner/name" per line.
 #
-# Reads config/core-repos.txt (comments starting with "#" and blank lines are
-# stripped). The file path is resolved relative to THIS library's location, not
-# the caller's, so it works no matter which script sources program-lib.sh.
+# Reads config/core-repos.txt, which holds BARE repo names (comments starting
+# with "#" and blank lines are stripped). The owner is derived by prepending
+# the loaded $ORG, so the same list works for any org the suite targets. Call
+# load_org_profile (or otherwise set ORG) before this function.
+#
+# The file path is resolved relative to THIS library's location, not the
+# caller's, so it works no matter which script sources program-lib.sh.
 # Override with $CORE_REPOS_FILE (used by tests).
 #
-# Fails loud: if the file is missing or yields zero repos, prints an error to
-# stderr and returns 1 -- callers must never silently scan an empty repo set.
+# Fails loud: if ORG is unset, or the file is missing or yields zero repos,
+# prints an error to stderr and returns 1 -- callers must never silently scan
+# an empty repo set or emit ownerless refs.
 #
 # Usage (portable; mapfile is bash 4+ and absent on macOS bash 3.2):
 #   REPOS=(); while IFS= read -r r; do [ -n "$r" ] && REPOS+=("$r"); done \
 #     < <(get_core_repos)
 get_core_repos() {
+  if [ -z "${ORG:-}" ]; then
+    echo "ERROR: ORG is unset; call load_org_profile before get_core_repos" >&2
+    return 1
+  fi
+
   local lib_dir
   lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   local repos_file="${CORE_REPOS_FILE:-$lib_dir/../config/core-repos.txt}"
@@ -829,7 +901,13 @@ get_core_repos() {
     return 1
   fi
 
-  printf '%s\n' "$repos"
+  # Prepend the loaded org to each bare name.
+  local line
+  while IFS= read -r line; do
+    [ -n "$line" ] && printf '%s/%s\n' "$ORG" "$line"
+  done <<EOF
+$repos
+EOF
 }
 
 # Print just the bare repo names (owner stripped) from the core allowlist.
@@ -859,28 +937,43 @@ is_core_repo() {
 
 # Map a local clone directory basename to its canonical bare repo name.
 #
-# Clone dirs may still use pre-rename names; this encapsulates the rename
-# remap table in one place so every script agrees. Unknown names pass through
+# Clone dirs may still use pre-rename names; the remap table lives in the org
+# profile's $REMAP (format: space-separated "basename:canonical" pairs, set by
+# load_org_profile), so every script agrees and the mapping is data, not code.
+# An empty $REMAP makes this pure identity; unknown names pass through
 # unchanged (identity), so non-remapped repos need no special handling.
 #
-# TRANSITIONAL: the non-identity entries below are a temporary bridge for the
-# kagenti->rossoctl rename while stale-named clone dirs still exist on disk.
-# Once clone dirs are renamed to canonical names, this function becomes pure
-# identity and the entries should be deleted. See rossoctl/automation#37.
-# It is a lookup table, not a rename detector -- do not treat it as protection
-# against future renames.
+# TRANSITIONAL: $REMAP is a temporary bridge for the kagenti->rossoctl rename
+# while stale-named clone dirs still exist on disk. Once clone dirs are renamed
+# to canonical names, the PROFILE_REMAP line is deleted and this becomes pure
+# identity. See rossoctl/automation#37. It is a lookup table, not a rename
+# detector -- do not treat it as protection against future renames.
+#
+# A malformed entry (no colon) is skipped with a warning, non-fatal.
 #
 # Returns: the bare repo name only (e.g. "rossoctl"), NOT an owner/name pair.
-#          Prepend the owner to build a full API reference, e.g. "rossoctl/$canon".
+#          Prepend the owner to build a full API reference, e.g. "$ORG/$canon".
 #
 # Usage: canon=$(canonical_repo_for_dir "$repo_dir_basename")
 # Args:
 #   $1 - clone directory basename (e.g. "kagenti", "cortex")
 canonical_repo_for_dir() {
   local dir_name="$1"
-  case "$dir_name" in
-    kagenti)            echo "rossoctl" ;;
-    kagenti-extensions) echo "cortex" ;;
-    *)                  echo "$dir_name" ;;
-  esac
+  local pair basename_part canon_part
+  # shellcheck disable=SC2086 -- intentional word-split on space-separated pairs
+  for pair in ${REMAP:-}; do
+    basename_part="${pair%%:*}"
+    canon_part="${pair#*:}"
+    if [ -z "$basename_part" ] || [ "$basename_part" = "$pair" ]; then
+      # Malformed entry (no colon) -- skip with a warning, non-fatal.
+      echo "WARN: ignoring malformed REMAP entry: $pair" >&2
+      continue
+    fi
+    if [ "$dir_name" = "$basename_part" ]; then
+      echo "$canon_part"
+      return 0
+    fi
+  done
+  # No match (or empty REMAP): identity.
+  echo "$dir_name"
 }
