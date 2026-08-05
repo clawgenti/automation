@@ -1,6 +1,6 @@
 # Link Health Report
 
-> Last scan: 2026-08-05 15:14 ET | Scan ID: 2026-08-05-006
+> Last scan: 2026-08-05 15:44 ET | Scan ID: 2026-08-05-007
 
 ## Summary
 
@@ -8,16 +8,16 @@
 |--------|-------|
 | Repos scanned | 8 |
 | Total links checked | 1745 |
-| Broken (internal) | 8 |
+| Broken (internal) | 10 |
 | Broken (external) | 12 |
-| New since last scan | +0 |
-| Fixed since last scan | -3 |
+| New since last scan | +3 |
+| Fixed since last scan | -1 |
 
 ## Trend (last 10 scans)
 
 | Date | Internal | External | Delta |
 |------|----------|----------|-------|
-| 08-05 | 8 | 12 | -3 |
+| 08-05 | 10 | 12 | +2 |
 | 08-04 | 0 | 0 | -26 |
 | 07-31 | 14 | 12 | -10 |
 | 07-29 | 24 | 12 | -699 |
@@ -33,10 +33,11 @@
 | Repo | Internal | External | Issues |
 |------|----------|----------|--------|
 | .github | 0 | 2 | 0 |
-| agent-skills | 3 | 0 | 0 |
+| agent-skills | 2 | 0 | 0 |
 | cortex | 0 | 1 | 0 |
 | examples | 0 | 2 | 0 |
 | rossoctl | 5 | 7 | 0 |
+| workload-harness | 3 | 0 | 0 |
 
 
 *Issues counts open GitHub issues filed by the scanner; a broken link may not yet have an issue (due to per-run limits) or may share an issue with another link in the same file.*
