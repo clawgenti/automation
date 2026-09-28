@@ -1,22 +1,23 @@
 # Link Health Report
 
-> Last scan: 2026-09-25 07:01 ET | Scan ID: 2026-09-25-001
+> Last scan: 2026-09-28 07:01 ET | Scan ID: 2026-09-28-001
 
 ## Summary
 
 | Metric | Value |
 |--------|-------|
 | Repos scanned | 8 |
-| Total links checked | 2208 |
-| Broken (internal) | 21 |
-| Broken (external) | 10 |
-| New since last scan | +5 |
-| Fixed since last scan | -0 |
+| Total links checked | 2257 |
+| Broken (internal) | 77 |
+| Broken (external) | 11 |
+| New since last scan | +69 |
+| Fixed since last scan | -12 |
 
 ## Trend (last 10 scans)
 
 | Date | Internal | External | Delta |
 |------|----------|----------|-------|
+| 09-28 | 77 | 11 | +57 |
 | 09-25 | 21 | 10 | +5 |
 | 09-23 | 20 | 6 | -1 |
 | 09-18 | 20 | 7 | 0 |
@@ -29,13 +30,13 @@
 
 | Repo | Internal | External | Issues |
 |------|----------|----------|--------|
-| .github | 3 | 2 | 0 |
+| .github | 36 | 2 | 0 |
 | agent-skills | 3 | 0 | 0 |
 | cortex | 9 | 4 | 0 |
 | examples | 1 | 1 | 0 |
-| operator | 3 | 0 | 0 |
-| rossoctl | 0 | 3 | 0 |
-| workload-harness | 2 | 0 | 0 |
+| operator | 3 | 1 | 0 |
+| rossoctl | 22 | 3 | 0 |
+| workload-harness | 3 | 0 | 0 |
 
 
 *Issues counts open GitHub issues filed by the scanner; a broken link may not yet have an issue (due to per-run limits) or may share an issue with another link in the same file.*
