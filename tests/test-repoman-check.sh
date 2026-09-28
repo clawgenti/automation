@@ -42,12 +42,27 @@ case "\$*" in
     exit 0 ;;
   *"api -i "*"/labels"*)
     n=\$(cat "$PROBE_COUNT_FILE"); n=\$((n + 1)); echo "\$n" > "$PROBE_COUNT_FILE"
+    # GH_STUB_PROBE_FAILS=1 fails the accepted-scope probe (transient 5xx, etc.),
+    # non-rate-limit so gh_with_backoff returns 1 with empty stdout. Optionally
+    # fail ONLY the first probe via GH_STUB_PROBE_FAILS_FIRST=1 to prove a
+    # transient failure is not cached and poisoning every later repo.
+    if [ "\${GH_STUB_PROBE_FAILS-0}" = "1" ]; then
+      echo "server error (502)" >&2; exit 1
+    fi
+    if [ "\${GH_STUB_PROBE_FAILS_FIRST-0}" = "1" ] && [ "\$n" = "1" ]; then
+      echo "server error (502)" >&2; exit 1
+    fi
     printf 'X-Accepted-OAuth-Scopes: %s\r\n' "\${GH_STUB_ACCEPTED-repo}"
     printf '\r\n[]\n'
     exit 0 ;;
   *"api repos/"*)
     # Visibility lookup: 'gh api repos/<owner>/<name> --jq .private'
     v=\$(cat "$VIS_COUNT_FILE"); v=\$((v + 1)); echo "\$v" > "$VIS_COUNT_FILE"
+    # GH_STUB_VIS_FAILS=1 fails the visibility lookup, non-rate-limit so
+    # gh_with_backoff returns 1 with empty stdout.
+    if [ "\${GH_STUB_VIS_FAILS-0}" = "1" ]; then
+      echo "could not resolve repository" >&2; exit 1
+    fi
     printf '%s\n' "\${GH_STUB_PRIVATE-false}"
     exit 0 ;;
   *"label list"*"--json name"*)
@@ -175,6 +190,53 @@ case "$out" in
     echo "FAIL list-failure must not report required labels as missing: [$out]"; fail=1 ;;
 esac
 # restore program config for subsequent cases
+echo '{"pat_scopes":["repo"],"labels_required":["ready-for-ai-review"]}' > "$PROGRAMS_DIR/pr-review.json"
+
+# --- accepted-scope probe FAILS -> the missing label is reported as "could not
+# determine whether the PAT can create it", NOT as a definitive "cannot create"
+# with web-UI remediation. A repo-scoped PAT that can create labels fine must
+# not be told to go use the web UI just because one probe request errored. ---
+echo '[{"owner":"alice","name":"tool"}]' > "$REPOS_FILE"
+echo '{"pat_scopes":["repo"],"labels_required":["ready-for-ai-review"]}' > "$PROGRAMS_DIR/pr-review.json"
+out=$(GH_STUB_SCOPES="repo" GH_STUB_LABELS="" GH_STUB_PROBE_FAILS=1 run_check --program pr-review); rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL probe-failure is a label-side gap, should still exit 0: rc=$rc out=[$out]"; fail=1; }
+case "$out" in
+  *"could not determine"*) ;;
+  *) echo "FAIL probe-failure should say it could not determine create-capability, got: [$out]"; fail=1 ;;
+esac
+# It must NOT confidently claim the PAT cannot create labels, and must NOT hand
+# out the web-UI remediation that "cannot create" triggers.
+case "$out" in
+  *"scopes do not cover label creation"*) echo "FAIL probe-failure must not claim 'cannot create' on a transient error: [$out]"; fail=1 ;;
+esac
+
+# --- transient probe failure must NOT be cached and replayed across repos:
+# fail ONLY the first probe. The first repo reports "could not determine", but
+# the later repos (probe recovers) must get a real verdict, NOT the poisoned one. ---
+echo '[{"owner":"alice","name":"tool"},{"owner":"bob","name":"kit"}]' > "$REPOS_FILE"
+echo '{"pat_scopes":["repo"],"labels_required":["ready-for-ai-review"]}' > "$PROGRAMS_DIR/pr-review.json"
+echo 0 > "$PROBE_COUNT_FILE"
+out=$(GH_STUB_SCOPES="repo" GH_STUB_LABELS="" GH_STUB_ACCEPTED="repo" GH_STUB_PROBE_FAILS_FIRST=1 run_check --program pr-review); rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL probe-first-failure should still exit 0: rc=$rc out=[$out]"; fail=1; }
+# The recovered repo must get a normal "PAT can create it" verdict, proving the
+# failed probe was not cached as the class answer.
+case "$out" in
+  *"gh label create"*) ;;
+  *) echo "FAIL transient probe failure was cached and poisoned later repos (no repo got a real create verdict): [$out]"; fail=1 ;;
+esac
+
+# --- visibility lookup FAILS -> a finding is emitted (the failure is NOT silent),
+# still exit 0, and the run does not crash. Assumes public and carries on. ---
+echo '[{"owner":"alice","name":"tool"}]' > "$REPOS_FILE"
+echo '{"pat_scopes":["repo"],"labels_required":["ready-for-ai-review"]}' > "$PROGRAMS_DIR/pr-review.json"
+out=$(GH_STUB_SCOPES="repo" GH_STUB_LABELS="" GH_STUB_ACCEPTED="repo" GH_STUB_VIS_FAILS=1 run_check --program pr-review); rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL visibility-failure is a label-side gap, should still exit 0: rc=$rc out=[$out]"; fail=1; }
+case "$out" in
+  *"could not determine visibility of alice/tool"*) ;;
+  *) echo "FAIL visibility-failure should emit a finding (not be silent), got: [$out]"; fail=1 ;;
+esac
+# restore single-repo config for subsequent cases
+echo '[{"owner":"alice","name":"tool"}]' > "$REPOS_FILE"
 echo '{"pat_scopes":["repo"],"labels_required":["ready-for-ai-review"]}' > "$PROGRAMS_DIR/pr-review.json"
 
 # --- multi-repo aggregation: two repos both missing the label, both reported ---

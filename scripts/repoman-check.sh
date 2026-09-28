@@ -176,8 +176,18 @@ probe_accepted_scopes() {
   if [ -f "$vis_file" ]; then
     is_private=$(cat "$vis_file")
   else
-    is_private=$(gh_with_backoff api "repos/$repo" --jq '.private' 2>/dev/null)
-    printf '%s' "$is_private" > "$vis_file"
+    # Guard the visibility lookup and let its stderr through (no 2>/dev/null):
+    # on failure the empty result would fall through the case to the public
+    # branch, silently misclassifying a private repo, and caching it would make
+    # that stick. Signal the failure to the caller (via a stdout sentinel, since
+    # this function runs in a $(...) subshell where add_finding would be lost)
+    # and do NOT cache it.
+    if is_private=$(gh_with_backoff api "repos/$repo" --jq '.private'); then
+      printf '%s' "$is_private" > "$vis_file"
+    else
+      printf '%s\n' "__VIS_FAILED__"
+      return
+    fi
   fi
   case "$is_private" in
     true) cache_file="$CACHE_DIR/accepted_private" ;;
@@ -189,7 +199,16 @@ probe_accepted_scopes() {
     return
   fi
 
-  hdr=$(gh_with_backoff api -i "repos/$repo/labels" | tr -d '\r')
+  # Guard the probe: on failure gh_with_backoff returns 1 with empty stdout, and
+  # an unchecked capture would yield an empty accepted-scopes list -- read as
+  # "PAT cannot create labels" for a token that can. Emit a sentinel instead and
+  # do NOT cache it: caching a transient failure would replay the wrong verdict
+  # for every later repo of this visibility class, even after the API recovers.
+  if ! hdr=$(gh_with_backoff api -i "repos/$repo/labels"); then
+    printf '%s\n' "__PROBE_FAILED__"
+    return
+  fi
+  hdr=$(printf '%s' "$hdr" | tr -d '\r')
   line=$(printf '%s\n' "$hdr" | grep -i '^X-Accepted-OAuth-Scopes:' | head -1)
   value="${line#*:}"
   value="${value#"${value%%[![:space:]]*}"}"
@@ -247,6 +266,21 @@ check_labels() {
     fi
 
     accepted=$(probe_accepted_scopes "$repo")
+
+    # probe_accepted_scopes runs in a $(...) subshell, so it signals a failed
+    # lookup via a stdout sentinel rather than add_finding (which would be lost
+    # with the subshell). Surface the finding here, in the parent. In both cases
+    # do not guess "cannot create" -- say we could not determine it.
+    case "$accepted" in
+      __VIS_FAILED__)
+        add_finding "LABEL WARN: could not determine visibility of $repo (see stderr above), so could not check whether '$label' can be created there; assuming nothing and skipping. Re-run once the API is reachable."
+        continue
+        ;;
+      __PROBE_FAILED__)
+        add_finding "LABEL WARN: '$label' missing on $repo, but could not determine whether the PAT can create it (the accepted-scope probe on $repo failed; see stderr above). Re-run once the API is reachable, or create the label manually if it stays missing."
+        continue
+        ;;
+    esac
 
     if can_create_labels "$accepted"; then
       if [ "$create_flag" -eq 1 ]; then
