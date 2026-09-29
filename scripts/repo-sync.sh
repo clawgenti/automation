@@ -34,6 +34,10 @@ while [ $# -gt 0 ]; do
 done
 
 # Fail-loud inputs (rc surfaced): config sets REPOS_DIR/FORK_OWNER; enrolled set.
+# repo-sync only uses REPOS_DIR, but repoman_config also validates and exports
+# FORK_OWNER as a required key, so this run inherits a dependency on a key it
+# does not itself use. Tracked for v0.1.1 (rossoctl/automation#98): let callers
+# validate only the config keys they need.
 repoman_config || exit 1
 ENROLLED=$(repoman_get_repos) || exit 1
 
