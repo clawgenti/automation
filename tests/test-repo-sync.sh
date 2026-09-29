@@ -166,4 +166,26 @@ printf '%s' "$entry" | grep -q "repository not found" || { echo "FAIL c11: git s
 # Must be the fatal line, not the leading "Cloning into '...'" progress line.
 printf '%s' "$entry" | grep -q "^  alice/tool (clone): Cloning into" && { echo "FAIL c11: progress line attached instead of the fatal error line"; fail=1; }
 
+# Case 12: REPOMAN_SKILLS_DIR set WITHOUT --refresh-skills -> the env var alone
+# triggers the refresh (spec 2026-09-28-repoman-phase4-repo-sync-design.md:112,
+# standing-orders/repo-sync.md:29 both document the env var as an alternative
+# trigger). Skills pull invoked once, exit 0.
+: > "$CALL_LOG"; rm -rf "$REPOS_ROOT"; mkdir -p "$REPOS_ROOT/alice/tool/.git" "$REPOS_ROOT/bob/lib/.git"
+SKILLS_DIR="$TEST_TMPDIR/agent-skills"; mkdir -p "$SKILLS_DIR/.git"
+out=$(REPOMAN_SKILLS_DIR="$SKILLS_DIR" run_sync 2>&1); rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL c12: exit $rc"; fail=1; }
+grep -q -- "-C $SKILLS_DIR pull" "$CALL_LOG" || { echo "FAIL c12: env var alone did not trigger skills pull"; fail=1; }
+
+# Case 13: REPOMAN_SKILLS_DIR set WITHOUT --refresh-skills but the dir is ABSENT
+# -> still fatal (exit non-zero), message names the missing dir, no bootstrap
+# clone. The error message must NOT claim '--refresh-skills' was passed, since
+# the env var was the trigger here (trigger-neutral wording).
+: > "$CALL_LOG"; rm -rf "$REPOS_ROOT"; mkdir -p "$REPOS_ROOT/alice/tool/.git" "$REPOS_ROOT/bob/lib/.git"
+MISSING_SKILLS="$TEST_TMPDIR/no-skills-env"; rm -rf "$MISSING_SKILLS"
+out=$(REPOMAN_SKILLS_DIR="$MISSING_SKILLS" run_sync 2>&1); rc=$?
+[ "$rc" -ne 0 ] || { echo "FAIL c13: absent skills dir (env trigger) should be fatal"; fail=1; }
+printf '%s' "$out" | grep -q "$MISSING_SKILLS" || { echo "FAIL c13: message does not name the missing skills dir"; fail=1; }
+grep -q "clone .*no-skills-env" "$CALL_LOG" && { echo "FAIL c13: attempted to bootstrap-clone skills dir"; fail=1; }
+printf '%s' "$out" | grep -q -- "--refresh-skills" && { echo "FAIL c13: error wrongly claims --refresh-skills when the env var triggered the refresh"; fail=1; }
+
 exit "$fail"

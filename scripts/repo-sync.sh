@@ -19,7 +19,9 @@ Sync enrolled repo clones (from ~/.repoman/repos.json) under
 Read-only toward GitHub. A per-repo clone/pull failure is logged and does not
 abort the run.
 
-  --refresh-skills   Also pull a local agent-skills clone (see REPOMAN_SKILLS_DIR).
+  --refresh-skills   Also pull a local agent-skills clone. Setting the
+                     REPOMAN_SKILLS_DIR env var alone also triggers this;
+                     the var selects the clone path (default ~/agent-skills).
   --help             Show this help and exit 0.
 EOF
 }
@@ -98,8 +100,11 @@ if [ "$failed" -gt 0 ]; then
 fi
 
 # --- optional skills refresh (opt-in; fatal on failure; no bootstrap-clone) ---
+# Two triggers, per spec: the --refresh-skills flag, OR a set REPOMAN_SKILLS_DIR
+# (the flag wins if both are given, but either alone opts in). Setting the env
+# var alone must not be a silent no-op, so it triggers the refresh here too.
 rc=0
-if [ "$REFRESH_SKILLS" -eq 1 ]; then
+if [ "$REFRESH_SKILLS" -eq 1 ] || [ -n "${REPOMAN_SKILLS_DIR:-}" ]; then
   skills_dir="${REPOMAN_SKILLS_DIR:-$HOME/agent-skills}"
   if [ -d "$skills_dir/.git" ]; then
     if git -C "$skills_dir" pull --ff-only; then
@@ -109,7 +114,9 @@ if [ "$REFRESH_SKILLS" -eq 1 ]; then
       rc=1
     fi
   else
-    echo "ERROR: --refresh-skills requested but no skills clone at $skills_dir" >&2
+    # Trigger-neutral wording: the refresh may have been requested by either the
+    # flag or the env var, so name neither.
+    echo "ERROR: skills refresh requested but no skills clone at $skills_dir" >&2
     echo "  (repo-sync does not bootstrap the skills clone; create it first)" >&2
     rc=1
   fi
