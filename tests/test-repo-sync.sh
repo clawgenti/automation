@@ -32,6 +32,10 @@ if [ "${1-}" = "clone" ]; then
   # git clone <url> <dir>
   url="$2"; dir="$3"
   if matches "$dir" "${GIT_STUB_CLONE_FAIL_FOR-}"; then
+    # Real git writes a progress line FIRST, then the error last. The summary
+    # must attach the error line, not the progress line (head -n1 would grab
+    # the wrong one).
+    printf "Cloning into '%s'...\n" "$dir" >&2
     printf 'fatal: repository not found: %s\n' "$url" >&2; exit 1
   fi
   mkdir -p "$dir/.git"; exit 0
@@ -39,6 +43,7 @@ elif [ "${1-}" = "-C" ]; then
   # git -C <dir> pull --ff-only
   dir="$2"
   if matches "$dir" "${GIT_STUB_PULL_FAIL_FOR-}"; then
+    printf 'From https://github.com/%s\n' "$dir" >&2
     printf 'fatal: not a git repository: %s\n' "$dir" >&2; exit 1
   fi
   exit 0
@@ -144,6 +149,10 @@ out=$(GIT_STUB_PULL_FAIL_FOR="alice/tool" run_sync 2>&1); rc=$?
 entry=$(printf '%s' "$out" | grep "^  alice/tool")
 [ -n "$entry" ] || { echo "FAIL c10: failed repo not named on its own summary entry line"; fail=1; }
 printf '%s' "$entry" | grep -q "not a git repository" || { echo "FAIL c10: git stderr not attached to the repo's own summary line"; fail=1; }
+# The attached line must be git's error, not its leading progress line. git
+# emits progress ("From https://...") first and the fatal line last, so a
+# head -n1 capture would wrongly grab the progress line.
+printf '%s' "$entry" | grep -q "^  alice/tool (pull): From " && { echo "FAIL c10: progress line attached instead of the fatal error line"; fail=1; }
 
 # Case 11: a CLONE failure attaches git's one-line stderr to the repo's summary
 # entry (same line as the repo name; see case 10 for why whole-output grep is
@@ -154,5 +163,7 @@ out=$(GIT_STUB_CLONE_FAIL_FOR="alice/tool" run_sync 2>&1); rc=$?
 entry=$(printf '%s' "$out" | grep "^  alice/tool")
 [ -n "$entry" ] || { echo "FAIL c11: failed repo not named on its own summary entry line"; fail=1; }
 printf '%s' "$entry" | grep -q "repository not found" || { echo "FAIL c11: git stderr not attached to the repo's own summary line"; fail=1; }
+# Must be the fatal line, not the leading "Cloning into '...'" progress line.
+printf '%s' "$entry" | grep -q "^  alice/tool (clone): Cloning into" && { echo "FAIL c11: progress line attached instead of the fatal error line"; fail=1; }
 
 exit "$fail"

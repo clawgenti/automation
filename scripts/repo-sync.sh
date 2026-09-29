@@ -45,6 +45,23 @@ failures=""
 giterr=$(mktemp) || { echo "ERROR: mktemp failed" >&2; exit 1; }
 trap 'rm -f "$giterr"' EXIT
 
+# git_error_line FILE — print the one line of git's stderr that names the cause.
+# git writes progress first ("Cloning into '...'", "From https://...") and the
+# actual "fatal:"/"error:"/"remote:" line last, so head -n1 would grab the
+# useless progress line. Prefer the last fatal/error/remote line; fall back to
+# the last non-empty line; finally the first line. Never fails (display only).
+git_error_line() {
+  local f="$1" line=""
+  line=$(grep -iE '^(fatal|error|remote):' "$f" 2>/dev/null | tail -n1)
+  if [ -z "$line" ]; then
+    line=$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -n1)
+  fi
+  if [ -z "$line" ]; then
+    line=$(head -n1 "$f" 2>/dev/null)
+  fi
+  printf '%s' "$line"
+}
+
 while IFS= read -r full; do
   [ -n "$full" ] || continue
   owner="${full%%/*}"; name="${full#*/}"
@@ -53,7 +70,7 @@ while IFS= read -r full; do
     if git -C "$dir" pull --ff-only 2>"$giterr"; then
       pulled=$((pulled + 1))
     else
-      msg=$(head -n1 "$giterr")
+      msg=$(git_error_line "$giterr")
       failed=$((failed + 1)); failures="$failures  $full (pull): $msg"$'\n'
     fi
   else
@@ -64,7 +81,7 @@ while IFS= read -r full; do
     if git clone "https://github.com/$owner/$name.git" "$dir" 2>"$giterr"; then
       cloned=$((cloned + 1))
     else
-      msg=$(head -n1 "$giterr")
+      msg=$(git_error_line "$giterr")
       failed=$((failed + 1)); failures="$failures  $full (clone): $msg"$'\n'
     fi
   fi
