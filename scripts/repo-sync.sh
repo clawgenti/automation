@@ -40,32 +40,39 @@ ENROLLED=$(repoman_get_repos) || exit 1
 pulled=0; cloned=0; failed=0
 failures=""
 
+# Scratch file for capturing a per-repo git command's stderr, so its one-line
+# error can be attached to that repo's summary entry (fail-loud: check mktemp's rc).
+giterr=$(mktemp) || { echo "ERROR: mktemp failed" >&2; exit 1; }
+trap 'rm -f "$giterr"' EXIT
+
 while IFS= read -r full; do
   [ -n "$full" ] || continue
   owner="${full%%/*}"; name="${full#*/}"
   dir="$REPOS_DIR/$owner/$name"
   if [ -d "$dir/.git" ]; then
-    if git -C "$dir" pull --ff-only; then
+    if git -C "$dir" pull --ff-only 2>"$giterr"; then
       pulled=$((pulled + 1))
     else
-      failed=$((failed + 1)); failures="$failures  $full (pull failed)"$'\n'
+      msg=$(head -n1 "$giterr")
+      failed=$((failed + 1)); failures="$failures  $full (pull): $msg"$'\n'
     fi
   else
     if ! mkdir -p "$REPOS_DIR/$owner"; then
       failed=$((failed + 1)); failures="$failures  $full (mkdir failed)"$'\n'
       continue
     fi
-    if git clone "https://github.com/$owner/$name.git" "$dir"; then
+    if git clone "https://github.com/$owner/$name.git" "$dir" 2>"$giterr"; then
       cloned=$((cloned + 1))
     else
-      failed=$((failed + 1)); failures="$failures  $full (clone failed)"$'\n'
+      msg=$(head -n1 "$giterr")
+      failed=$((failed + 1)); failures="$failures  $full (clone): $msg"$'\n'
     fi
   fi
 done <<< "$ENROLLED"
 
 echo "repo-sync: pulled $pulled cloned $cloned failed $failed"
 if [ "$failed" -gt 0 ]; then
-  echo "failed repos (git error printed above per repo):"
+  echo "failed repos:"
   printf '%s' "$failures"
 fi
 

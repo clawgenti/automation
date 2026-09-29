@@ -32,14 +32,14 @@ if [ "${1-}" = "clone" ]; then
   # git clone <url> <dir>
   url="$2"; dir="$3"
   if matches "$dir" "${GIT_STUB_CLONE_FAIL_FOR-}"; then
-    printf 'fatal: could not clone %s\n' "$url" >&2; exit 1
+    printf 'fatal: repository not found: %s\n' "$url" >&2; exit 1
   fi
   mkdir -p "$dir/.git"; exit 0
 elif [ "${1-}" = "-C" ]; then
   # git -C <dir> pull --ff-only
   dir="$2"
   if matches "$dir" "${GIT_STUB_PULL_FAIL_FOR-}"; then
-    printf 'fatal: not possible to fast-forward in %s\n' "$dir" >&2; exit 1
+    printf 'fatal: not a git repository: %s\n' "$dir" >&2; exit 1
   fi
   exit 0
 fi
@@ -132,5 +132,27 @@ printf '%s' "$out" | grep -q "failed 2" || { echo "FAIL c9: not 'failed 2' (both
 printf '%s' "$out" | grep -qi "mkdir" || { echo "FAIL c9: failure not labeled 'mkdir'"; fail=1; }
 # restore the good config for any later cases / re-runs
 printf '{"repos_dir":"%s","fork_owner":"rubambiza"}\n' "$REPOS_ROOT" > "$REPOMAN_CONFIG_FILE"
+
+# Case 10: a PULL failure attaches git's one-line stderr to the repo's summary
+# entry (same line as the repo name -- not merely present anywhere in output,
+# since git's own uncaptured stderr would otherwise leak into 2>&1 and give a
+# false pass).
+: > "$CALL_LOG"; rm -rf "$REPOS_ROOT"
+mkdir -p "$REPOS_ROOT/alice/tool/.git" "$REPOS_ROOT/bob/lib/.git"
+out=$(GIT_STUB_PULL_FAIL_FOR="alice/tool" run_sync 2>&1); rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL c10: per-repo pull failure must stay non-fatal, got exit $rc"; fail=1; }
+entry=$(printf '%s' "$out" | grep "^  alice/tool")
+[ -n "$entry" ] || { echo "FAIL c10: failed repo not named on its own summary entry line"; fail=1; }
+printf '%s' "$entry" | grep -q "not a git repository" || { echo "FAIL c10: git stderr not attached to the repo's own summary line"; fail=1; }
+
+# Case 11: a CLONE failure attaches git's one-line stderr to the repo's summary
+# entry (same line as the repo name; see case 10 for why whole-output grep is
+# insufficient).
+: > "$CALL_LOG"; rm -rf "$REPOS_ROOT"; mkdir -p "$REPOS_ROOT"
+out=$(GIT_STUB_CLONE_FAIL_FOR="alice/tool" run_sync 2>&1); rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL c11: per-repo clone failure must stay non-fatal, got exit $rc"; fail=1; }
+entry=$(printf '%s' "$out" | grep "^  alice/tool")
+[ -n "$entry" ] || { echo "FAIL c11: failed repo not named on its own summary entry line"; fail=1; }
+printf '%s' "$entry" | grep -q "repository not found" || { echo "FAIL c11: git stderr not attached to the repo's own summary line"; fail=1; }
 
 exit "$fail"
