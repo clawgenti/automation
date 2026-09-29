@@ -51,7 +51,10 @@ while IFS= read -r full; do
       failed=$((failed + 1)); failures="$failures  $full (pull failed)"$'\n'
     fi
   else
-    mkdir -p "$REPOS_DIR/$owner"
+    if ! mkdir -p "$REPOS_DIR/$owner"; then
+      failed=$((failed + 1)); failures="$failures  $full (mkdir failed)"$'\n'
+      continue
+    fi
     if git clone "https://github.com/$owner/$name.git" "$dir"; then
       cloned=$((cloned + 1))
     else
@@ -65,4 +68,22 @@ if [ "$failed" -gt 0 ]; then
   echo "failed repos (git error printed above per repo):"
   printf '%s' "$failures"
 fi
-exit 0
+
+# --- optional skills refresh (opt-in; fatal on failure; no bootstrap-clone) ---
+rc=0
+if [ "$REFRESH_SKILLS" -eq 1 ]; then
+  skills_dir="${REPOMAN_SKILLS_DIR:-$HOME/agent-skills}"
+  if [ -d "$skills_dir/.git" ]; then
+    if git -C "$skills_dir" pull --ff-only; then
+      echo "repo-sync: refreshed skills clone at $skills_dir"
+    else
+      echo "ERROR: skills refresh failed: git pull in $skills_dir" >&2
+      rc=1
+    fi
+  else
+    echo "ERROR: --refresh-skills requested but no skills clone at $skills_dir" >&2
+    echo "  (repo-sync does not bootstrap the skills clone; create it first)" >&2
+    rc=1
+  fi
+fi
+exit "$rc"

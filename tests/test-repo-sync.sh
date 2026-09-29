@@ -98,4 +98,39 @@ printf '%s' "$out" | grep -qi "gh repo list" && { echo "FAIL c5: a \$ORG fallbac
 # restore repos.json for any later cases
 printf '[{"owner":"alice","name":"tool"},{"owner":"bob","name":"lib"}]\n' > "$REPOMAN_REPOS_FILE"
 
+# Case 6: --refresh-skills with skills dir PRESENT -> skills pull invoked once.
+: > "$CALL_LOG"; rm -rf "$REPOS_ROOT"; mkdir -p "$REPOS_ROOT/alice/tool/.git" "$REPOS_ROOT/bob/lib/.git"
+SKILLS_DIR="$TEST_TMPDIR/agent-skills"; mkdir -p "$SKILLS_DIR/.git"
+out=$(REPOMAN_SKILLS_DIR="$SKILLS_DIR" run_sync --refresh-skills 2>&1); rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL c6: exit $rc"; fail=1; }
+grep -q -- "-C $SKILLS_DIR pull" "$CALL_LOG" || { echo "FAIL c6: skills clone not pulled"; fail=1; }
+
+# Case 7: --refresh-skills with skills dir ABSENT -> FATAL, exit non-zero,
+# message names the missing dir, and NO clone attempted for it.
+: > "$CALL_LOG"; rm -rf "$REPOS_ROOT"; mkdir -p "$REPOS_ROOT/alice/tool/.git" "$REPOS_ROOT/bob/lib/.git"
+MISSING_SKILLS="$TEST_TMPDIR/no-skills-here"; rm -rf "$MISSING_SKILLS"
+out=$(REPOMAN_SKILLS_DIR="$MISSING_SKILLS" run_sync --refresh-skills 2>&1); rc=$?
+[ "$rc" -ne 0 ] || { echo "FAIL c7: absent skills dir should be fatal"; fail=1; }
+printf '%s' "$out" | grep -q "$MISSING_SKILLS" || { echo "FAIL c7: message does not name the missing skills dir"; fail=1; }
+grep -q "clone .*no-skills-here" "$CALL_LOG" && { echo "FAIL c7: attempted to bootstrap-clone skills dir"; fail=1; }
+
+# Case 8: --help -> usage, exit 0
+out=$(run_sync --help 2>&1); rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL c8: --help exit $rc"; fail=1; }
+printf '%s' "$out" | grep -qi "usage" || { echo "FAIL c8: --help lacks usage"; fail=1; }
+
+# Case 9: mkdir for the clone target fails (ENOTDIR) -> that repo counted failed
+# with an accurate "mkdir failed" label, other repo still processed, EXIT 0.
+# Force failure by making the repos_dir sit UNDER a regular file.
+: > "$CALL_LOG"
+BLOCKER="$TEST_TMPDIR/blocker-file"; : > "$BLOCKER"   # a regular file
+# point config's repos_dir at a path under that file so mkdir -p can't create it
+printf '{"repos_dir":"%s/repos","fork_owner":"rubambiza"}\n' "$BLOCKER" > "$REPOMAN_CONFIG_FILE"
+out=$(run_sync 2>&1); rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL c9: mkdir failure should stay non-fatal, got exit $rc"; fail=1; }
+printf '%s' "$out" | grep -q "failed 2" || { echo "FAIL c9: not 'failed 2' (both repos should fail mkdir)"; fail=1; }
+printf '%s' "$out" | grep -qi "mkdir" || { echo "FAIL c9: failure not labeled 'mkdir'"; fail=1; }
+# restore the good config for any later cases / re-runs
+printf '{"repos_dir":"%s","fork_owner":"rubambiza"}\n' "$REPOS_ROOT" > "$REPOMAN_CONFIG_FILE"
+
 exit "$fail"
