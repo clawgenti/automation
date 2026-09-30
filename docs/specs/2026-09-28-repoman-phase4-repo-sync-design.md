@@ -91,6 +91,14 @@ repo-sync's entire purpose is cloning the ones that are missing.
 For each `owner/name` from `repoman_get_repos`, with target
 `dir="$REPOS_DIR/$owner/$name"`:
 
+- **Validate `owner` and `name` first.** `repos.json` is external input, so a
+  crafted entry (`"owner":".."`, an absolute or slash-bearing `name`) could make
+  the clone target escape the `repos_dir` tree. Each segment must be a single
+  safe path component: non-empty, not `.` or `..`, and drawn only from
+  `[A-Za-z0-9._-]` (GitHub-legal; a `/` is thereby rejected too). A failing
+  entry is counted `failed` with an `invalid owner/name` label and skipped
+  before any `mkdir`/`clone` — same non-fatal, named, tallied treatment as a
+  git failure, so one bad entry does not abort the run.
 - If `"$dir/.git"` exists → run `git -C "$dir" pull --ff-only` and inspect its
   exit code directly (`if ! git -C "$dir" pull --ff-only 2>err; then ...`). On
   non-zero: capture git's stderr, log the repo with that error, count `failed`,
@@ -133,11 +141,15 @@ Not part of the per-repo tally; reported on its own line.
 A human-readable summary to stdout: counts of pulled / cloned / failed, each
 failed repo named with its one-line git error, and the skills-refresh outcome
 if that mode ran. Nothing is written to GitHub and nothing is posted. Exit
-status: non-zero iff the config/enrollment reads failed (fail-loud inputs) OR
-the skills refresh was requested and failed. **Per-repo clone/pull failures do
-NOT change exit status** — a partial sync is the expected degraded mode (the
-standing order's "logged, not fatal" contract), and a non-zero exit there would
-break the nightly cron on one unreachable repo.
+status: non-zero iff the config/enrollment reads failed (fail-loud inputs), OR
+**every** enrolled repo failed, OR the skills refresh was requested and failed.
+**A _partial_ sync (some repos failed, at least one succeeded) does NOT change
+exit status** — a partial sync is the expected degraded mode (the standing
+order's "logged, not fatal" contract), and a non-zero exit there would break the
+nightly cron on one unreachable repo. But an _all-failed_ run accomplished
+nothing and signals a systemic fault (bad config path, network down, every clone
+broken), so it exits non-zero rather than masquerading as success. The line
+between the two is `failed == enrolled > 0`.
 
 ## Error model
 
@@ -145,7 +157,9 @@ break the nightly cron on one unreachable repo.
 |---|---|
 | `config.json` missing / key empty | fail loud, exit non-zero (via `repoman_config`) |
 | `repos.json` missing / empty / malformed | fail loud, exit non-zero (via `repoman_get_repos`). **This is the "absent repos.json" case — no `$ORG` fallback.** |
-| one repo clone/pull fails | log with git's error, continue, count as `failed`, exit stays 0 |
+| unsafe `owner`/`name` in `repos.json` (`.`, `..`, `/`, other non-`[A-Za-z0-9._-]`) | reject before any `mkdir`/`clone`, count as `failed` with `invalid owner/name`, continue |
+| one repo clone/pull fails (but ≥1 other repo succeeds) | log with git's error, continue, count as `failed`, exit stays 0 |
+| **every** enrolled repo fails (`failed == enrolled > 0`) | log each, then exit non-zero — an all-failed run must not report success |
 | `--refresh-skills` but skills dir absent | fail loud on that step, exit non-zero |
 | `--help` | usage to stdout, exit 0 |
 
@@ -169,14 +183,22 @@ Cases:
 1. All enrolled repos missing → each is cloned; tally = cloned N, exit 0.
 2. All present → each is pulled; tally = pulled N, exit 0.
 3. Mixed present/absent → correct split.
-4. One repo's clone fails (stub returns non-zero for it) → that repo counted
-   `failed`, others still processed, **exit still 0**, error text names the repo.
+4. One repo's clone fails while a sibling succeeds → the failed repo counted
+   `failed`, the sibling still processed, **exit still 0** (partial sync), error
+   text names the repo.
 5. `repos.json` absent → fail loud, exit non-zero, message names the file
    (asserts NO `$ORG` / `gh repo list` fallback fired).
 6. `--refresh-skills` with skills dir present → skills pull invoked once.
 7. `--refresh-skills` with skills dir absent → fail loud on that step, exit
    non-zero, message names the missing dir.
 8. `--help` → usage, exit 0.
+9. Unsafe `owner`/`name` entry (`..`, slash-bearing name) → rejected before git,
+   counted `failed` and flagged `invalid`, never cloned/pulled; a well-formed
+   sibling entry is still processed.
+10. **Every** enrolled repo fails → exit non-zero (`failed N`); a partial
+    failure with one success stays exit 0 (guards the boundary the other way).
+11. A skills pull that fails (dir present, `git pull` non-zero) → fatal, exit
+    non-zero, failure surfaced and the failing dir named.
 
 Each negative test captures and greps stderr (assert the message, not just a
 non-zero exit) so "fails cleanly" cannot mean "fails silently".

@@ -43,8 +43,25 @@ done
 repoman_config || exit 1
 ENROLLED=$(repoman_get_repos) || exit 1
 
-pulled=0; cloned=0; failed=0
+pulled=0; cloned=0; failed=0; enrolled=0
 failures=""
+
+# valid_slug SLUG — true if SLUG is a safe single path segment for an owner or
+# repo name. repos.json is external input; an entry like "../../etc" or an
+# absolute path would let a clone/mkdir escape the repos_dir tree. Restrict to
+# GitHub-legal characters ([A-Za-z0-9._-]) and reject empty or "." / ".."
+# (a "." component would still resolve inside the tree but is never a real repo,
+# and ".." escapes it). Slashes cannot appear: they are already consumed by the
+# owner/name split, so a "name" of "../../escape" arrives here as "../../escape"
+# and is rejected for the ".." components and the "/" it still contains.
+valid_slug() {
+  local s="$1"
+  case "$s" in
+    ""|"."|"..") return 1 ;;
+    *[!A-Za-z0-9._-]*) return 1 ;;  # any char outside the safe set (incl. "/")
+  esac
+  return 0
+}
 
 # Scratch file for capturing a per-repo git command's stderr, so its one-line
 # error can be attached to that repo's summary entry (fail-loud: check mktemp's rc).
@@ -70,7 +87,14 @@ git_error_line() {
 
 while IFS= read -r full; do
   [ -n "$full" ] || continue
+  enrolled=$((enrolled + 1))
   owner="${full%%/*}"; name="${full#*/}"
+  # Reject path-traversal / unsafe entries before any mkdir/clone touches the
+  # filesystem. Counted failed and named, like any other per-repo failure.
+  if ! valid_slug "$owner" || ! valid_slug "$name"; then
+    failed=$((failed + 1)); failures="$failures  $full (invalid owner/name)"$'\n'
+    continue
+  fi
   dir="$REPOS_DIR/$owner/$name"
   if [ -d "$dir/.git" ]; then
     if git -C "$dir" pull --ff-only 2>"$giterr"; then
@@ -99,11 +123,20 @@ if [ "$failed" -gt 0 ]; then
   printf '%s' "$failures"
 fi
 
+# Exit model: a per-repo failure is non-fatal so a single bad repo does not
+# abort the sync of the rest. But if EVERY enrolled repo failed, the run
+# accomplished nothing and must not report success -- that signals a systemic
+# fault (bad config, network down, all clones broken), not one flaky repo.
+rc=0
+if [ "$enrolled" -gt 0 ] && [ "$failed" -eq "$enrolled" ]; then
+  echo "ERROR: all $enrolled enrolled repos failed to sync" >&2
+  rc=1
+fi
+
 # --- optional skills refresh (opt-in; fatal on failure; no bootstrap-clone) ---
 # Two triggers, per spec: the --refresh-skills flag, OR a set REPOMAN_SKILLS_DIR
 # (the flag wins if both are given, but either alone opts in). Setting the env
 # var alone must not be a silent no-op, so it triggers the refresh here too.
-rc=0
 if [ "$REFRESH_SKILLS" -eq 1 ] || [ -n "${REPOMAN_SKILLS_DIR:-}" ]; then
   skills_dir="${REPOMAN_SKILLS_DIR:-$HOME/agent-skills}"
   if [ -d "$skills_dir/.git" ]; then

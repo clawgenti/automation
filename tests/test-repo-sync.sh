@@ -68,6 +68,10 @@ out=$(run_sync 2>&1); rc=$?
 [ "$rc" -eq 0 ] || { echo "FAIL c1: exit $rc"; fail=1; }
 grep -q "clone .*/alice/tool" "$CALL_LOG" || { echo "FAIL c1: alice/tool not cloned"; fail=1; }
 grep -q "clone .*/bob/lib"    "$CALL_LOG" || { echo "FAIL c1: bob/lib not cloned"; fail=1; }
+# Pin the exact clone URL, not just the destination dir: a dir-only grep matches
+# even if owner/name are swapped in the URL (github.com/$name/$owner.git).
+grep -qF "clone https://github.com/alice/tool.git " "$CALL_LOG" || { echo "FAIL c1: alice/tool clone URL wrong"; fail=1; }
+grep -qF "clone https://github.com/bob/lib.git " "$CALL_LOG" || { echo "FAIL c1: bob/lib clone URL wrong"; fail=1; }
 printf '%s' "$out" | grep -q "cloned 2" || { echo "FAIL c1: summary not 'cloned 2'"; fail=1; }
 
 # Case 2: both present -> both pulled, exit 0
@@ -98,17 +102,29 @@ printf '%s' "$out" | grep -q "alice/tool" || { echo "FAIL c4: failed repo not na
 : > "$CALL_LOG"; rm -f "$REPOMAN_REPOS_FILE"
 out=$(run_sync 2>&1); rc=$?
 [ "$rc" -ne 0 ] || { echo "FAIL c5: absent repos.json should fail loud"; fail=1; }
-printf '%s' "$out" | grep -q "repos" || { echo "FAIL c5: message does not name the repos file"; fail=1; }
+printf '%s' "$out" | grep -qF "$REPOMAN_REPOS_FILE" || { echo "FAIL c5: message does not name the repos file"; fail=1; }
 printf '%s' "$out" | grep -qi "gh repo list" && { echo "FAIL c5: a \$ORG fallback fired"; fail=1; }
 # restore repos.json for any later cases
 printf '[{"owner":"alice","name":"tool"},{"owner":"bob","name":"lib"}]\n' > "$REPOMAN_REPOS_FILE"
 
-# Case 6: --refresh-skills with skills dir PRESENT -> skills pull invoked once.
+# Case 6: --refresh-skills FLAG alone (no REPOMAN_SKILLS_DIR) -> skills pull
+# invoked once against the DEFAULT path ($HOME/agent-skills). Point HOME at a
+# temp dir so the flag exercises the default-path branch, not the env override.
+: > "$CALL_LOG"; rm -rf "$REPOS_ROOT"; mkdir -p "$REPOS_ROOT/alice/tool/.git" "$REPOS_ROOT/bob/lib/.git"
+FAKE_HOME="$TEST_TMPDIR/home"; mkdir -p "$FAKE_HOME/agent-skills/.git"
+out=$(HOME="$FAKE_HOME" run_sync --refresh-skills 2>&1); rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL c6: exit $rc"; fail=1; }
+grep -q -- "-C $FAKE_HOME/agent-skills pull" "$CALL_LOG" || { echo "FAIL c6: default-path skills clone not pulled"; fail=1; }
+
+# Case 6b: skills dir PRESENT but the pull FAILS -> fatal (exit non-zero), the
+# failure is surfaced (not swallowed), and the failing dir is named. A skills
+# pull that fails silently would leave a stale skills clone masquerading as fresh.
 : > "$CALL_LOG"; rm -rf "$REPOS_ROOT"; mkdir -p "$REPOS_ROOT/alice/tool/.git" "$REPOS_ROOT/bob/lib/.git"
 SKILLS_DIR="$TEST_TMPDIR/agent-skills"; mkdir -p "$SKILLS_DIR/.git"
-out=$(REPOMAN_SKILLS_DIR="$SKILLS_DIR" run_sync --refresh-skills 2>&1); rc=$?
-[ "$rc" -eq 0 ] || { echo "FAIL c6: exit $rc"; fail=1; }
-grep -q -- "-C $SKILLS_DIR pull" "$CALL_LOG" || { echo "FAIL c6: skills clone not pulled"; fail=1; }
+out=$(REPOMAN_SKILLS_DIR="$SKILLS_DIR" GIT_STUB_PULL_FAIL_FOR="agent-skills" run_sync --refresh-skills 2>&1); rc=$?
+[ "$rc" -ne 0 ] || { echo "FAIL c6b: skills pull failure should be fatal, got exit $rc"; fail=1; }
+printf '%s' "$out" | grep -qi "skills refresh failed" || { echo "FAIL c6b: skills pull failure not surfaced"; fail=1; }
+printf '%s' "$out" | grep -qF "$SKILLS_DIR" || { echo "FAIL c6b: message does not name the failing skills dir"; fail=1; }
 
 # Case 7: --refresh-skills with skills dir ABSENT -> FATAL, exit non-zero,
 # message names the missing dir, and NO clone attempted for it.
@@ -124,16 +140,20 @@ out=$(run_sync --help 2>&1); rc=$?
 [ "$rc" -eq 0 ] || { echo "FAIL c8: --help exit $rc"; fail=1; }
 printf '%s' "$out" | grep -qi "usage" || { echo "FAIL c8: --help lacks usage"; fail=1; }
 
-# Case 9: mkdir for the clone target fails (ENOTDIR) -> that repo counted failed
-# with an accurate "mkdir failed" label, other repo still processed, EXIT 0.
-# Force failure by making the repos_dir sit UNDER a regular file.
+# Case 9: mkdir for the clone target fails (ENOTDIR) -> each such repo is counted
+# failed with an accurate "mkdir failed" label and processing does not abort
+# mid-loop (both repos are still attempted). Here the repos_dir sits under a
+# regular file, so mkdir fails for BOTH repos -> this is an all-failed run, which
+# the exit model treats as fatal (exit non-zero); partial mkdir failure staying
+# non-fatal is covered by the partial-failure cases (4, 16). The label + count
+# assertions confirm the loop kept going rather than aborting on the first mkdir.
 : > "$CALL_LOG"
 BLOCKER="$TEST_TMPDIR/blocker-file"; : > "$BLOCKER"   # a regular file
 # point config's repos_dir at a path under that file so mkdir -p can't create it
 printf '{"repos_dir":"%s/repos","fork_owner":"rubambiza"}\n' "$BLOCKER" > "$REPOMAN_CONFIG_FILE"
 out=$(run_sync 2>&1); rc=$?
-[ "$rc" -eq 0 ] || { echo "FAIL c9: mkdir failure should stay non-fatal, got exit $rc"; fail=1; }
-printf '%s' "$out" | grep -q "failed 2" || { echo "FAIL c9: not 'failed 2' (both repos should fail mkdir)"; fail=1; }
+[ "$rc" -ne 0 ] || { echo "FAIL c9: all-repos mkdir failure should be fatal (all-failed), got exit $rc"; fail=1; }
+printf '%s' "$out" | grep -q "failed 2" || { echo "FAIL c9: not 'failed 2' (both repos should fail mkdir -> loop did not abort early)"; fail=1; }
 printf '%s' "$out" | grep -qi "mkdir" || { echo "FAIL c9: failure not labeled 'mkdir'"; fail=1; }
 # restore the good config for any later cases / re-runs
 printf '{"repos_dir":"%s","fork_owner":"rubambiza"}\n' "$REPOS_ROOT" > "$REPOMAN_CONFIG_FILE"
@@ -187,5 +207,44 @@ out=$(REPOMAN_SKILLS_DIR="$MISSING_SKILLS" run_sync 2>&1); rc=$?
 printf '%s' "$out" | grep -q "$MISSING_SKILLS" || { echo "FAIL c13: message does not name the missing skills dir"; fail=1; }
 grep -q "clone .*no-skills-env" "$CALL_LOG" && { echo "FAIL c13: attempted to bootstrap-clone skills dir"; fail=1; }
 printf '%s' "$out" | grep -q -- "--refresh-skills" && { echo "FAIL c13: error wrongly claims --refresh-skills when the env var triggered the refresh"; fail=1; }
+
+# Case 14: an enrolled entry with a path-traversal / unsafe owner or name is
+# REJECTED before any mkdir/clone -- it is counted failed and named, the run
+# does NOT clone or pull it, and a well-formed sibling entry is still processed.
+# Without this, "../../etc" or an absolute name would let repos.json write
+# outside the repos_dir tree.
+: > "$CALL_LOG"; rm -rf "$REPOS_ROOT"
+printf '[{"owner":"..","name":"evil"},{"owner":"alice","name":"tool"}]\n' > "$REPOMAN_REPOS_FILE"
+out=$(run_sync 2>&1); rc=$?
+# the unsafe entry must never reach git
+grep -q "clone" "$CALL_LOG" && grep -q "evil" "$CALL_LOG" && { echo "FAIL c14: unsafe entry reached git clone"; fail=1; }
+printf '%s' "$out" | grep -qi "invalid" || { echo "FAIL c14: unsafe entry not flagged invalid"; fail=1; }
+printf '%s' "$out" | grep -q "\.\./evil" || { echo "FAIL c14: unsafe entry not named"; fail=1; }
+# the well-formed sibling is still cloned
+grep -qF "clone https://github.com/alice/tool.git " "$CALL_LOG" || { echo "FAIL c14: safe sibling not cloned"; fail=1; }
+# also reject a name containing a slash-dotdot even when owner is clean
+: > "$CALL_LOG"; rm -rf "$REPOS_ROOT"
+printf '[{"owner":"alice","name":"../../escape"}]\n' > "$REPOMAN_REPOS_FILE"
+out=$(run_sync 2>&1); rc=$?
+grep -q "clone" "$CALL_LOG" && { echo "FAIL c14: unsafe name reached git clone"; fail=1; }
+printf '%s' "$out" | grep -qi "invalid" || { echo "FAIL c14: unsafe name not flagged invalid"; fail=1; }
+# restore repos.json for later cases
+printf '[{"owner":"alice","name":"tool"},{"owner":"bob","name":"lib"}]\n' > "$REPOMAN_REPOS_FILE"
+
+# Case 15: when EVERY enrolled repo fails, the run exits NON-ZERO (a total
+# failure must not report success). One or more successes keeps exit 0
+# (covered by case 4); all-failed is the newly-fatal condition.
+: > "$CALL_LOG"; rm -rf "$REPOS_ROOT"
+out=$(GIT_STUB_CLONE_FAIL_FOR="tool lib" run_sync 2>&1); rc=$?
+[ "$rc" -ne 0 ] || { echo "FAIL c15: all-repos-failed should exit non-zero, got $rc"; fail=1; }
+printf '%s' "$out" | grep -q "failed 2" || { echo "FAIL c15: not 'failed 2'"; fail=1; }
+
+# Case 16: a PARTIAL failure (some fail, some succeed) still exits 0 -- confirm
+# case 15's fatal condition is specifically "all failed", not "any failed".
+: > "$CALL_LOG"; rm -rf "$REPOS_ROOT"
+out=$(GIT_STUB_CLONE_FAIL_FOR="tool" run_sync 2>&1); rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL c16: partial failure must stay exit 0, got $rc"; fail=1; }
+printf '%s' "$out" | grep -q "failed 1" || { echo "FAIL c16: not 'failed 1'"; fail=1; }
+printf '%s' "$out" | grep -q "cloned 1" || { echo "FAIL c16: not 'cloned 1'"; fail=1; }
 
 exit "$fail"
