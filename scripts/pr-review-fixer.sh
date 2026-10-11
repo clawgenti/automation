@@ -9,6 +9,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/program-lib.sh"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/pr-review-lib.sh"
 
 # --- Configuration ---
 BOT_USER="clawgenti"
@@ -77,11 +79,7 @@ REPORTS_DIR="${REPORTS_DIR:-$HOME/reports/pr-review}"
 STATE_FILE="$REPORTS_DIR/state.json"
 LATEST_FILE="$REPORTS_DIR/latest.json"
 
-STATE_DEFAULT='{"in_progress": [], "reviewed": []}'
-STATE_CHECK='(.in_progress | type) == "array" and (.reviewed | type) == "array"'
-
-validate_json_schema "$STATE_FILE" "$STATE_CHECK" "$STATE_DEFAULT"
-cp "$STATE_FILE" "$TMPDIR/state.json"
+prreview_state_load "$STATE_FILE" > "$TMPDIR/state.json"
 
 # =============================================================================
 # BEGIN: Mark eligible PRs as in_progress, output queue with diff_map
@@ -160,7 +158,7 @@ if [ "$COMMAND" = "begin" ]; then
   if [ "$DRY_RUN" = true ]; then
     echo "[DRY RUN] Would write updated state.json to $REPORTS_DIR" >&2
   else
-    atomic_write_file "$TMPDIR/state.json" "$REPORTS_DIR/state.json"
+    prreview_state_write "$TMPDIR/state.json" "$REPORTS_DIR/state.json" "pr-review-fixer"
   fi
 
   # Output enriched queue
@@ -244,7 +242,7 @@ if [ "$COMMAND" = "finalize" ]; then
   if [ "$DRY_RUN" = true ]; then
     echo "[DRY RUN] Would write state.json and fixer-history.json to $REPORTS_DIR" >&2
   else
-    atomic_write_file "$TMPDIR/state.json" "$REPORTS_DIR/state.json"
+    prreview_state_write "$TMPDIR/state.json" "$REPORTS_DIR/state.json" "pr-review-fixer"
 
     FIXER_ROW=$(jq -n \
       --arg date "$NOW" \
