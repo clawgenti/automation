@@ -45,7 +45,7 @@ OPTIONS:
 
 ENVIRONMENT:
   REPOS_DIR         (required) Directory containing cloned org repos
-  REPORTS_DIR       (optional) Where to write reports (default: ./reports/dep-bump)
+  REPORTS_DIR       (optional) Where to write reports (default: ~/reports/dep-bump)
 
 PREREQUISITES:
   bash 4+, gh (authenticated), jq
@@ -66,11 +66,16 @@ repoman_config
 # --- Configuration ---
 validate_repos_dir "${REPOS_DIR:-}"
 
-REPORTS_DIR="${REPORTS_DIR:-./reports/dep-bump}"
+REPORTS_DIR="${REPORTS_DIR:-$HOME/reports/dep-bump}"
 SCAN_DATE=$(date -u +"%Y-%m-%d")
 SCAN_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 MAX_HISTORY_ROWS=500
 ESCALATION_THRESHOLD=5
+
+# Provenance footer for the issue bodies this scanner creates. Resolved once at
+# startup: the helper lazily writes _meta.<skill>.json beside this skill and returns the
+# pinned-SHA RepoMan attribution (blob/main fallback when the SHA is unresolved).
+SKILL_FOOTER=$(skill_attribution "dep-bump-scanner")
 
 # SLA thresholds (days)
 SLA_CRITICAL=3
@@ -477,7 +482,9 @@ Dependabot PRs should be reviewed and merged within the SLA window.
 ## Additional Context
 
 Category: $category
-Detected by: OpenClaw Dep Bump Scanner (scan $SCAN_ID)"
+
+---
+$SKILL_FOOTER (scan $SCAN_ID)"
 
   if [ "$DRY_RUN" = true ]; then
     echo "  [DRY RUN] Would create issue: $issue_title"
@@ -579,6 +586,20 @@ HISTORY_ROW=$(jq -nc \
 
 append_history_row "$REPORTS_DIR" "$HISTORY_ROW" "$MAX_HISTORY_ROWS"
 echo "Appended to $REPORTS_DIR/history.json"
+
+# --- Register in the program registry (Phase 5) ---
+# The index lives beside the program report dirs (parent of REPORTS_DIR);
+# REPOMAN_INDEX_FILE overrides for tests/dogfood. A failed index write must
+# NOT fail an otherwise successful scan (the reports are the primary
+# product) -- but it is logged, not swallowed silently.
+index_file="${REPOMAN_INDEX_FILE:-$(dirname "$REPORTS_DIR")/_index.json}"
+if ! "$SCRIPT_DIR/repoman-index.sh" \
+      --index "$index_file" \
+      --program dep-bump \
+      --display-name "Dependency Bumps" \
+      --report-path "$REPORTS_DIR"; then
+  echo "WARNING: failed to update program registry at $index_file (scan reports were still written)" >&2
+fi
 
 # --- Escalation check ---
 if [ "$NEW_STALE" -gt "$ESCALATION_THRESHOLD" ]; then
