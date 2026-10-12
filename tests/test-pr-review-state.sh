@@ -69,12 +69,16 @@ check "round-trip: reviewed_at reconstructed from at" \
 check "round-trip: in_progress survives" \
   "[ \"\$(echo '$w2' | jq -r '.in_progress[0].started_at')\" = '2026-10-01T00:00:00Z' ]"
 
-# --- Case 4: invalid JSON -> empty working shape ---
+# --- Case 4: invalid JSON -> empty working shape, non-destructively ---
 bad="$TMPDIR/bad.json"
 echo 'not json {' > "$bad"
 w=$(pr_review_state_load "$bad" 2>/dev/null)
 check "invalid: falls back to empty reviewed" \
   "[ \"\$(echo '$w' | jq -c '.reviewed')\" = '[]' ]"
+# The spec promises the fallback is non-destructive: the bad file is logged to
+# stderr but NOT rewritten. Assert the on-disk content is byte-for-byte intact.
+check "invalid: bad file left untouched (non-destructive)" \
+  "[ \"\$(cat '$bad')\" = 'not json {' ]"
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

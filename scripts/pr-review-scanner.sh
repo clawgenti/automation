@@ -82,7 +82,9 @@ fi
 LABEL="ready-for-ai-review"
 REVIEW_MARKER="<!-- reviewed:"
 STALE_THRESHOLD_MIN=30
-TTL_DAYS=30
+# Single source of truth: the lib stamps acted_on.ttl_days with this same value,
+# so the scanner's eviction and the persisted TTL cannot drift (sourced above).
+TTL_DAYS="$PR_REVIEW_TTL_DAYS"
 MAX_HISTORY_ROWS=500
 
 # --- Workspace and reports setup ---

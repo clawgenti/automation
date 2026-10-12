@@ -63,9 +63,13 @@ pr_review_state_load() {
 # Wraps the working shape into envelope v1 and atomically writes it to dest.
 pr_review_state_write() {
   local src="$1" dst="$2" program="$3"
+  # Temp sits beside dst (same filesystem) so atomic_write_file's rename is
+  # atomic. Guard the jq explicitly and clean up on failure: under the caller's
+  # set -e a failed jq would otherwise abort before the rm and leak
+  # state.json.env.<pid> into the reports dir.
   local tmp="${dst}.env.$$"
 
-  jq -c \
+  if ! jq -c \
     --argjson sv "$PR_REVIEW_SCHEMA_VERSION" \
     --arg program "$program" \
     --argjson ttl "$PR_REVIEW_TTL_DAYS" '
@@ -78,7 +82,11 @@ pr_review_state_write() {
                 head_sha: $r.head_sha, at: $r.reviewed_at, ttl_days: $ttl } } ) ),
       program_data: { in_progress: (.in_progress // []) }
     }
-  ' "$src" > "$tmp"
+  ' "$src" > "$tmp"; then
+    echo "ERROR: pr_review_state_write: failed to build envelope from $src" >&2
+    rm -f "$tmp"
+    return 1
+  fi
 
   atomic_write_file "$tmp" "$dst"
   rm -f "$tmp"
