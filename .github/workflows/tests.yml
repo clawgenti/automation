@@ -1,0 +1,68 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install tools
+        run: |
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            sudo apt-get update && sudo apt-get install -y jq shellcheck
+          else
+            brew install jq shellcheck
+          fi
+      - name: shellcheck (library modules)
+        # Lint the shared library modules only. Consumer scripts carry a
+        # pre-existing SC2034 arg-parsing idiom tracked separately; see the
+        # consumer-lint follow-up issue.
+        run: shellcheck --severity=warning scripts/core.sh scripts/github-api.sh scripts/fork.sh scripts/org.sh scripts/program-lib.sh scripts/repoman-setup.sh scripts/repoman-requirements.sh scripts/repoman-check.sh scripts/repo-sync.sh
+      - name: shellcheck (snapshot toolkit)
+        # The snapshot scripts + their tests are clean at warning severity (they
+        # avoid the consumer SC2034 idiom), so lint them as their own group.
+        run: shellcheck --severity=warning snapshot/*.sh tests/test-lib-snapshot.sh tests/test-snapshot-*.sh
+      - name: shellcheck (repoman tests)
+        # The Phase 3 repoman test files are clean at warning severity. Note:
+        # tests/test-repoman-setup.sh is deliberately NOT listed here because it
+        # carries intentional test idioms (SC2088 literal-tilde, SC2034 var read
+        # by a sourced function) that are load-bearing for what it asserts.
+        run: shellcheck --severity=warning tests/test-repoman-requirements.sh tests/test-github-api.sh tests/test-repoman-check.sh tests/test-repo-sync.sh tests/test-repoman-index.sh tests/test-automation-health-dashboard.sh tests/test-link-health-index-wiring.sh tests/test-dep-bump-index-wiring.sh tests/test-skill-meta.sh tests/test-pr-review-integration.sh tests/test-pr-review-impact.sh tests/test-weekly-report.sh
+      - name: Run test suite
+        # NOTE: this list and the shellcheck lists above are EXPLICIT, not globs.
+        # A new test file must be added here (and to the relevant shellcheck
+        # step) or it silently never runs in CI.
+        # All three previously-deferred consumer tests are back: the pr-review
+        # and weekly-report scripts now resolve the enrolled set via
+        # repoman_get_repos, and each consumer test stubs it with
+        # REPOMAN_REPOS_FILE so the suite is hermetic (passes with or without an
+        # authenticated gh).
+        run: |
+          set -e
+          for t in tests/test-lib-inventory.sh tests/test-lib-modules.sh \
+                   tests/test-repoman-config.sh tests/test-repoman-repos.sh \
+                   tests/test-repoman-setup.sh tests/test-repo-sync.sh \
+                   tests/test-extract-broken-links.sh tests/test-parse-diff-map.sh \
+                   tests/test-lib-snapshot.sh tests/test-snapshot-manifest.sh \
+                   tests/test-snapshot-secrets.sh tests/test-snapshot-state.sh \
+                   tests/test-snapshot-driver.sh tests/test-snapshot-restore.sh \
+                   tests/test-repoman-index.sh tests/test-automation-health-dashboard.sh \
+                   tests/test-link-health-index-wiring.sh tests/test-dep-bump-index-wiring.sh \
+                   tests/test-github-api.sh tests/test-skill-meta.sh \
+                   tests/test-pr-review-integration.sh tests/test-pr-review-impact.sh \
+                   tests/test-weekly-report.sh; do
+            echo "== $t =="
+            bash "$t"
+          done

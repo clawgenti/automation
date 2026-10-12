@@ -20,7 +20,6 @@ source "$SCRIPT_DIR/program-lib.sh"
 # --- CLI args ---
 DRY_RUN=true  # Safe by default
 ISSUE_LIMIT=15
-ORG="kagenti"
 VERBOSE=false
 SHOW_HELP=false
 
@@ -29,7 +28,6 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=true; shift ;;
     --live) DRY_RUN=false; shift ;;
     --issue-limit) ISSUE_LIMIT="$2"; shift 2 ;;
-    --org) ORG="$2"; shift 2 ;;
     --verbose) VERBOSE=true; shift ;;
     --help|-h) SHOW_HELP=true; shift ;;
     *) echo "Unknown option: $1"; exit 1 ;;
@@ -47,13 +45,12 @@ OPTIONS:
   --dry-run         Analyze and preview comments only (default)
   --live            Post comments on PRs and issues
   --issue-limit N   Process at most N issues (default: 5)
-  --org NAME        GitHub org (default: kagenti)
   --verbose         Print additional diagnostic output
   --help, -h        Show this help
 
 ENVIRONMENT:
   REPOS_DIR         (required) Directory containing cloned org repos
-  REPORTS_DIR       (optional) Where to write reports (default: ./reports/dep-bump)
+  REPORTS_DIR       (optional) Where to write reports (default: ~/reports/dep-bump)
 
 PREREQUISITES:
   bash 4+, gh (authenticated), jq
@@ -61,15 +58,28 @@ USAGE
   exit 0
 fi
 
+# Resolve deployment constants (repos_dir, fork_owner) from ~/.repoman/config.json.
+repoman_config
+
 # --- Configuration ---
 validate_repos_dir "${REPOS_DIR:-}"
 
-REPORTS_DIR="${REPORTS_DIR:-./reports/dep-bump}"
+REPORTS_DIR="${REPORTS_DIR:-$HOME/reports/dep-bump}"
 SCAN_DATE=$(date -u +"%Y-%m-%d")
 SCAN_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 MAX_HISTORY_ROWS=500
-FORK_OWNER="clawgenti"
-FIXER_SIGNATURE="Automated analysis by Kagenti Dep Bump Fixer"
+# Provenance footer appended to every fixer comment/issue. Resolved once at
+# startup: the helper lazily writes _meta.<skill>.json beside this skill and returns the
+# pinned-SHA RepoMan attribution (blob/main fallback when unresolved).
+SKILL_FOOTER=$(skill_attribution "dep-bump-fixer")
+# Stable dedup key: the substring every footer form shares, regardless of the
+# per-run SHA (both "...RepoMan dep-bump-fixer@<sha>..." and the blob/main
+# fallback contain it). The dedup search (below) looks for THIS, not the whole
+# footer, so a changing SHA never defeats dedup. Comments carrying the former
+# marker value are no longer recognized, so an already-analyzed PR may receive
+# one duplicate comment on the next run after the marker changed — acceptable,
+# one-time.
+FIXER_SIGNATURE="RepoMan dep-bump-fixer"
 
 # --- Workspace setup ---
 setup_workspace "dep-bump-fixer"
@@ -80,7 +90,6 @@ mkdir -p "$REPORTS_DIR"
 SCAN_ID=$(generate_scan_id "$REPORTS_DIR" "$SCAN_DATE")
 
 echo "=== Dep Bump Fixer $SCAN_ID ==="
-echo "Org: $ORG"
 echo "Repos dir: $REPOS_DIR"
 echo "Reports dir: $REPORTS_DIR"
 if [ "$DRY_RUN" = true ]; then echo "Mode: DRY RUN (no comments posted)"; else echo "Mode: LIVE"; fi
@@ -93,33 +102,23 @@ if [ ! -f "$REPORTS_DIR/baseline.json" ]; then
 
   # Query merged Dependabot PRs across all repos (last 90 days)
   : > "$TMPDIR/merged_prs.jsonl"
-  SEEN_CANON=""
-  for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
-    [ -d "$repo_dir" ] || continue
-    repo_name=$(basename "$repo_dir")
-    if [[ "$repo_name" == .* && "$repo_name" != ".github" ]] || [ ! -d "$repo_dir/.git" ]; then
-      continue
-    fi
+  # Drive the loop from the enrolled set (authoritative), statting each clone,
+  # rather than globbing "$REPOS_DIR"/*/ and filtering -- a "*/" glob silently
+  # drops a ".github" repo. The here-string keeps the body in the current shell.
+  ENROLLED=$(repoman_load_enrolled) || exit 1
+  CLONES=$(enrolled_clone_dirs "$ENROLLED")
+  while IFS= read -r full_repo; do
+    [ -n "$full_repo" ] || continue
 
-    # Core-repo allowlist + canonical remap + dedup of duplicate clone dirs.
-    canon=$(canonical_repo_for_dir "$repo_name")
-    if ! is_core_repo "$canon"; then
-      continue
-    fi
-    case " $SEEN_CANON " in
-      *" $canon "*) continue ;;
-    esac
-    SEEN_CANON="$SEEN_CANON $canon"
-
-    gh pr list --repo "rossoctl/$canon" \
+    gh pr list --repo "$full_repo" \
       --author "app/dependabot" \
       --state merged \
       --json number,createdAt,mergedAt \
-      --limit 50 2>/dev/null | jq -c --arg repo "$repo_name" \
+      --limit 50 2>/dev/null | jq -c --arg repo "$full_repo" \
       '.[] | . + {repo: $repo}' >> "$TMPDIR/merged_prs.jsonl" 2>/dev/null || true
 
     sleep 0.5
-  done
+  done <<< "$CLONES"
 
   # Compute baseline metrics
   total_merged=$(wc -l < "$TMPDIR/merged_prs.jsonl" | tr -d ' ')
@@ -160,26 +159,18 @@ echo "--- Discovering scanner issues ---"
 : > "$TMPDIR/issues.jsonl"
 REPOS_CHECKED=0
 
-SEEN_CANON=""
-for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
-  [ -d "$repo_dir" ] || continue
-  repo_name=$(basename "$repo_dir")
-  if [[ "$repo_name" == .* && "$repo_name" != ".github" ]] || [ ! -d "$repo_dir/.git" ]; then
-    continue
-  fi
+# Drive the loop from the enrolled set (authoritative), statting each clone,
+# rather than globbing "$REPOS_DIR"/*/ and filtering -- a "*/" glob silently
+# drops a ".github" repo. enrolled_clone_dirs emits each enrolled owner/name
+# whose clone exists; the here-string keeps the body in the current shell so
+# counters accumulate.
+ENROLLED=$(repoman_load_enrolled) || exit 1
+CLONES=$(enrolled_clone_dirs "$ENROLLED")
 
-  # Core-repo allowlist + canonical remap + dedup of duplicate clone dirs.
-  canon=$(canonical_repo_for_dir "$repo_name")
-  if ! is_core_repo "$canon"; then
-    continue
-  fi
-  case " $SEEN_CANON " in
-    *" $canon "*) continue ;;
-  esac
-  SEEN_CANON="$SEEN_CANON $canon"
+while IFS= read -r full_repo; do
+  [ -n "$full_repo" ] || continue
 
   REPOS_CHECKED=$((REPOS_CHECKED + 1))
-  full_repo="rossoctl/$canon"
 
   issues_json=$(gh issue list --repo "$full_repo" \
     --search "[dep-bump] in:title" \
@@ -193,7 +184,7 @@ for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
   fi
 
   sleep 0.3
-done
+done <<< "$CLONES"
 
 TOTAL_ISSUES=$(wc -l < "$TMPDIR/issues.jsonl" | tr -d ' ')
 echo "Found $TOTAL_ISSUES open scanner issues across $REPOS_CHECKED repos"
@@ -353,7 +344,7 @@ $changelog_summary
 This PR has exceeded the ${sla_days}-day SLA for ${severity}-severity patches. Please review and merge, or document a deferral reason.
 
 ---
-_${FIXER_SIGNATURE} (scan $SCAN_ID)_"
+_${SKILL_FOOTER} (scan $SCAN_ID)_"
       ;;
 
     major)
@@ -373,7 +364,7 @@ Major version bumps require manual review. Consider:
 - Deferring with documented justification if migration is non-trivial
 
 ---
-_${FIXER_SIGNATURE} (scan $SCAN_ID)_"
+_${SKILL_FOOTER} (scan $SCAN_ID)_"
       ;;
 
     *)
@@ -407,7 +398,7 @@ $changelog_summary
 - Recommendation: $recommendation
 
 ---
-_${FIXER_SIGNATURE} (scan $SCAN_ID)_"
+_${SKILL_FOOTER} (scan $SCAN_ID)_"
       ;;
   esac
 
@@ -428,7 +419,7 @@ _${FIXER_SIGNATURE} (scan $SCAN_ID)_"
       gh_with_backoff issue comment "$issue_number" --repo "$issue_repo" \
         --body "Analysis posted on PR #$pr_number. Awaiting human action.
 
-_${FIXER_SIGNATURE} (scan $SCAN_ID)_" 2>/dev/null || true
+_${SKILL_FOOTER} (scan $SCAN_ID)_" 2>/dev/null || true
     else
       echo "    WARN: Failed to post comment on PR #$pr_number"
     fi
@@ -457,7 +448,6 @@ if [ -f "$REPORTS_DIR/latest.json" ]; then
 
       gap_repo=$(echo "$gap" | jq -r '.repo')
       gap_ecosystems=$(echo "$gap" | jq -r '.ecosystems | join(",")')
-      full_gap_repo="$ORG/$gap_repo"
 
       echo "  $gap_repo: missing config (ecosystems: $gap_ecosystems)"
 
@@ -481,7 +471,7 @@ if [ -f "$REPORTS_DIR/latest.json" ]; then
           branch_name="chore/add-dependabot-config"
 
           # Check if PR already exists
-          existing_pr=$(gh pr list --repo "$full_gap_repo" --state open \
+          existing_pr=$(gh pr list --repo "$gap_repo" --state open \
             --search "dependabot.yml in:title" --json number --jq '.[0].number' 2>/dev/null || echo "")
 
           if [ -n "$existing_pr" ] && [ "$existing_pr" != "null" ]; then
@@ -502,8 +492,8 @@ if [ -f "$REPORTS_DIR/latest.json" ]; then
             if git diff --cached --quiet; then
               echo "no"
             else
-              ensure_fork "$ORG" "$gap_repo" "$FORK_OWNER"
-              if create_fork_pr "$ORG" "$gap_repo" "$FORK_OWNER" "$branch_name" \
+              ensure_fork "${gap_repo%%/*}" "${gap_repo#*/}" "$FORK_OWNER"
+              if create_fork_pr "${gap_repo%%/*}" "${gap_repo#*/}" "$FORK_OWNER" "$branch_name" \
                 "chore: Add Dependabot configuration" \
                 "chore: Add Dependabot configuration for $gap_repo" \
                 "Enable automated dependency updates with weekly schedule and grouped minor/patch updates.
@@ -511,7 +501,7 @@ if [ -f "$REPORTS_DIR/latest.json" ]; then
 Ecosystems: $gap_ecosystems
 
 ---
-_${FIXER_SIGNATURE} (scan $SCAN_ID)_"; then
+_${SKILL_FOOTER} (scan $SCAN_ID)_"; then
                 echo "yes"
               else
                 echo "no"
@@ -536,33 +526,23 @@ echo "--- Computing metrics ---"
 
 # Query recently merged Dependabot PRs (last 30 days) for TTM
 : > "$TMPDIR/recent_merged.jsonl"
-SEEN_CANON_TTM=""
-for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
-  [ -d "$repo_dir" ] || continue
-  repo_name=$(basename "$repo_dir")
-  if [[ "$repo_name" == .* && "$repo_name" != ".github" ]] || [ ! -d "$repo_dir/.git" ]; then
-    continue
-  fi
+# Drive the loop from the enrolled set (authoritative), statting each clone,
+# rather than globbing "$REPOS_DIR"/*/ and filtering -- a "*/" glob silently
+# drops a ".github" repo. The here-string keeps the body in the current shell.
+ENROLLED=$(repoman_load_enrolled) || exit 1
+CLONES=$(enrolled_clone_dirs "$ENROLLED")
+while IFS= read -r full_repo; do
+  [ -n "$full_repo" ] || continue
 
-  # Core-repo allowlist + canonical remap + dedup of duplicate clone dirs.
-  canon=$(canonical_repo_for_dir "$repo_name")
-  if ! is_core_repo "$canon"; then
-    continue
-  fi
-  case " $SEEN_CANON_TTM " in
-    *" $canon "*) continue ;;
-  esac
-  SEEN_CANON_TTM="$SEEN_CANON_TTM $canon"
-
-  gh pr list --repo "rossoctl/$canon" \
+  gh pr list --repo "$full_repo" \
     --author "app/dependabot" \
     --state merged \
     --json number,createdAt,mergedAt \
-    --limit 20 2>/dev/null | jq -c --arg repo "$repo_name" \
+    --limit 20 2>/dev/null | jq -c --arg repo "$full_repo" \
     '.[] | . + {repo: $repo}' >> "$TMPDIR/recent_merged.jsonl" 2>/dev/null || true
 
   sleep 0.3
-done
+done <<< "$CLONES"
 
 # Compute median time-to-merge
 MERGED_SINCE_LAST=0
@@ -608,7 +588,6 @@ FIXER_LATEST=$(jq -nc \
   --arg scan_id "$SCAN_ID" \
   --arg date "$SCAN_TIME" \
   --argjson duration "$SECONDS" \
-  --arg org "$ORG" \
   --argjson issues_processed "$ISSUES_PROCESSED" \
   --argjson comments_posted "$COMMENTS_POSTED" \
   --argjson issues_closed "$ISSUES_CLOSED" \
@@ -623,7 +602,7 @@ FIXER_LATEST=$(jq -nc \
   --argjson stale_count "$CURRENT_STALE" \
   --argjson baseline_ttm "$BASELINE_TTM" \
   --argjson baseline_stale "$BASELINE_STALE" \
-  '{scan_id: $scan_id, date: $date, duration_seconds: $duration, org: $org,
+  '{scan_id: $scan_id, date: $date, duration_seconds: $duration,
     issues_processed: $issues_processed, comments_posted: $comments_posted,
     issues_closed: $issues_closed, config_prs_created: $config_prs,
     breakdown: {security: $security, routine: $routine, major: $major},
