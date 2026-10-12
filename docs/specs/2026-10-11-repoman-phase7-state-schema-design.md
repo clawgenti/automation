@@ -113,15 +113,15 @@ A new automation-only lib, sourced by both pr-review scripts after
 `program-lib.sh` (so `jq`, `validate_json_schema`, `atomic_write_file` from
 `core.sh` are already available). Three functions:
 
-- `prreview_state_load <state_file>` — reads the file (or empty default),
+- `pr_review_state_load <state_file>` — reads the file (or empty default),
   migrates legacy → v1 in memory, validates the envelope, and emits the v1 JSON
   on stdout. Replaces the current inline `STATE_DEFAULT`/`STATE_CHECK` +
   `validate_json_schema` block duplicated in both scripts.
-- `prreview_state_reviewed_add <state_json> <repo> <number> <sha> <ts>` and the
+- `pr_review_state_reviewed_add <state_json> <repo> <number> <sha> <ts>` and the
   eviction/read accessors stay thin wrappers over `jq` on the `acted_on` map, so
   the scanner's existing TTL/stale eviction logic operates on envelope fields
   instead of the bare lists.
-- `prreview_state_write <tmp_json> <dest>` — thin pass-through to
+- `pr_review_state_write <tmp_json> <dest>` — thin pass-through to
   `atomic_write_file` (kept for symmetry and a single write site).
 
 The validation check becomes:
@@ -136,7 +136,7 @@ Two test files are in play; both run in CI today (the run list in
 `Run test suite` loop and the `shellcheck (repoman tests)` group. This is Phase
 7's coverage of record. Cases:
 
-1. Missing file → `prreview_state_load` yields an empty envelope v1
+1. Missing file → `pr_review_state_load` yields an empty envelope v1
    (`schema_version==1`, empty `acted_on`, empty `program_data.in_progress`).
 2. Legacy `{in_progress,reviewed}` file → migrated: a `reviewed` entry appears
    under `acted_on` with `at`/`ttl_days`/`head_sha`; `in_progress` preserved

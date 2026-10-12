@@ -13,20 +13,20 @@
 #   {reviewed:[{repo,number,head_sha,reviewed_at}], in_progress:[{repo,number,head_sha,started_at}]}
 
 # Empty working shape (same literal the scripts used pre-envelope).
-PRREVIEW_WORKING_DEFAULT='{"in_progress": [], "reviewed": []}'
+PR_REVIEW_WORKING_DEFAULT='{"in_progress": [], "reviewed": []}'
 
-PRREVIEW_TTL_DAYS=30
-PRREVIEW_SCHEMA_VERSION=1
+PR_REVIEW_TTL_DAYS=30
+PR_REVIEW_SCHEMA_VERSION=1
 
-# prreview_state_load <state_file>
+# pr_review_state_load <state_file>
 # Prints the WORKING shape JSON to stdout. Handles: envelope v1, legacy
 # {in_progress,reviewed}, missing file, invalid JSON.
-prreview_state_load() {
+pr_review_state_load() {
   local file="$1"
 
   # Missing or unreadable -> empty working shape.
   if [ ! -f "$file" ]; then
-    printf '%s\n' "$PRREVIEW_WORKING_DEFAULT"
+    printf '%s\n' "$PR_REVIEW_WORKING_DEFAULT"
     return 0
   fi
 
@@ -34,7 +34,7 @@ prreview_state_load() {
   # reset-on-invalid behavior, but non-destructive: we do not rewrite the file).
   if ! jq empty "$file" 2>/dev/null; then
     echo "WARN: $file is not valid JSON, using empty state." >&2
-    printf '%s\n' "$PRREVIEW_WORKING_DEFAULT"
+    printf '%s\n' "$PR_REVIEW_WORKING_DEFAULT"
     return 0
   fi
 
@@ -56,19 +56,19 @@ prreview_state_load() {
     else
       {reviewed: [], in_progress: []}
     end
-  ' "$file" 2>/dev/null || printf '%s\n' "$PRREVIEW_WORKING_DEFAULT"
+  ' "$file" 2>/dev/null || printf '%s\n' "$PR_REVIEW_WORKING_DEFAULT"
 }
 
-# prreview_state_write <working_json_file> <dest_file> <program_id>
+# pr_review_state_write <working_json_file> <dest_file> <program_id>
 # Wraps the working shape into envelope v1 and atomically writes it to dest.
-prreview_state_write() {
+pr_review_state_write() {
   local src="$1" dst="$2" program="$3"
   local tmp="${dst}.env.$$"
 
   jq -c \
-    --argjson sv "$PRREVIEW_SCHEMA_VERSION" \
+    --argjson sv "$PR_REVIEW_SCHEMA_VERSION" \
     --arg program "$program" \
-    --argjson ttl "$PRREVIEW_TTL_DAYS" '
+    --argjson ttl "$PR_REVIEW_TTL_DAYS" '
     {
       schema_version: $sv,
       program: $program,

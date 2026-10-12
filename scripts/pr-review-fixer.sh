@@ -79,7 +79,7 @@ REPORTS_DIR="${REPORTS_DIR:-$HOME/reports/pr-review}"
 STATE_FILE="$REPORTS_DIR/state.json"
 LATEST_FILE="$REPORTS_DIR/latest.json"
 
-prreview_state_load "$STATE_FILE" > "$TMPDIR/state.json"
+pr_review_state_load "$STATE_FILE" > "$TMPDIR/state.json"
 
 # =============================================================================
 # BEGIN: Mark eligible PRs as in_progress, output queue with diff_map
@@ -158,7 +158,7 @@ if [ "$COMMAND" = "begin" ]; then
   if [ "$DRY_RUN" = true ]; then
     echo "[DRY RUN] Would write updated state.json to $REPORTS_DIR" >&2
   else
-    prreview_state_write "$TMPDIR/state.json" "$REPORTS_DIR/state.json" "pr-review-fixer"
+    pr_review_state_write "$TMPDIR/state.json" "$REPORTS_DIR/state.json" "pr-review-fixer"
   fi
 
   # Output enriched queue
@@ -242,7 +242,7 @@ if [ "$COMMAND" = "finalize" ]; then
   if [ "$DRY_RUN" = true ]; then
     echo "[DRY RUN] Would write state.json and fixer-history.json to $REPORTS_DIR" >&2
   else
-    prreview_state_write "$TMPDIR/state.json" "$REPORTS_DIR/state.json" "pr-review-fixer"
+    pr_review_state_write "$TMPDIR/state.json" "$REPORTS_DIR/state.json" "pr-review-fixer"
 
     FIXER_ROW=$(jq -n \
       --arg date "$NOW" \

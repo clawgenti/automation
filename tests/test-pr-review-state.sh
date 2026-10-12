@@ -26,7 +26,7 @@ echo "=== pr-review-lib state envelope test ==="
 
 # --- Case 1: missing file -> empty working shape ---
 missing="$TMPDIR/nope.json"
-w=$(prreview_state_load "$missing")
+w=$(pr_review_state_load "$missing")
 check "missing: reviewed is empty array" \
   "[ \"\$(echo '$w' | jq -c '.reviewed')\" = '[]' ]"
 check "missing: in_progress is empty array" \
@@ -38,7 +38,7 @@ cat > "$legacy" <<'JSON'
 {"in_progress":[{"repo":"o/r","number":5,"head_sha":"deadbeef","started_at":"2026-10-01T00:00:00Z"}],
  "reviewed":[{"repo":"o/r","number":9,"head_sha":"cafef00d","reviewed_at":"2026-10-02T00:00:00Z"}]}
 JSON
-w=$(prreview_state_load "$legacy")
+w=$(pr_review_state_load "$legacy")
 check "legacy: reviewed entry preserved" \
   "[ \"\$(echo '$w' | jq -r '.reviewed[0].head_sha')\" = 'cafef00d' ]"
 check "legacy: in_progress entry preserved" \
@@ -47,7 +47,7 @@ check "legacy: in_progress entry preserved" \
 # --- Case 3: round-trip write -> envelope v1 on disk, load back to working ---
 dest="$TMPDIR/state.json"
 echo "$w" > "$TMPDIR/working.json"
-prreview_state_write "$TMPDIR/working.json" "$dest" "pr-review-scanner"
+pr_review_state_write "$TMPDIR/working.json" "$dest" "pr-review-scanner"
 check "write: schema_version == 1" \
   "[ \"\$(jq -r '.schema_version' '$dest')\" = '1' ]"
 check "write: program recorded" \
@@ -61,7 +61,7 @@ check "write: acted_on carries ttl_days 30" \
 check "write: in_progress -> program_data.in_progress" \
   "[ \"\$(jq -r '.program_data.in_progress[0].number' '$dest')\" = '5' ]"
 # load the envelope back -> working shape identical in content
-w2=$(prreview_state_load "$dest")
+w2=$(pr_review_state_load "$dest")
 check "round-trip: reviewed head_sha survives" \
   "[ \"\$(echo '$w2' | jq -r '.reviewed[0].head_sha')\" = 'cafef00d' ]"
 check "round-trip: reviewed_at reconstructed from at" \
@@ -72,7 +72,7 @@ check "round-trip: in_progress survives" \
 # --- Case 4: invalid JSON -> empty working shape ---
 bad="$TMPDIR/bad.json"
 echo 'not json {' > "$bad"
-w=$(prreview_state_load "$bad" 2>/dev/null)
+w=$(pr_review_state_load "$bad" 2>/dev/null)
 check "invalid: falls back to empty reviewed" \
   "[ \"\$(echo '$w' | jq -c '.reviewed')\" = '[]' ]"
 

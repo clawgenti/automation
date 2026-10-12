@@ -99,7 +99,7 @@ SCAN_ID=$(generate_scan_id "$REPORTS_DIR" "$SCAN_DATE")
 
 # --- Load state (envelope-aware; migrates legacy in memory) ---
 STATE_FILE="$REPORTS_DIR/state.json"
-prreview_state_load "$STATE_FILE" > "$TMPDIR/state.json"
+pr_review_state_load "$STATE_FILE" > "$TMPDIR/state.json"
 
 # --- Step 1: List labeled PRs across target repos ---
 QUEUE_FILE="$TMPDIR/queue.json"
@@ -326,7 +326,7 @@ else
   [ "$VERBOSE" = true ] && echo "Wrote $REPORTS_DIR/latest.json" >&2
 
   # state.json (envelope v1, atomic write from file)
-  prreview_state_write "$TMPDIR/state.json" "$REPORTS_DIR/state.json" "pr-review-scanner"
+  pr_review_state_write "$TMPDIR/state.json" "$REPORTS_DIR/state.json" "pr-review-scanner"
   [ "$VERBOSE" = true ] && echo "Wrote $REPORTS_DIR/state.json" >&2
 
   # history.json
