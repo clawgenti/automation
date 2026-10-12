@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================================================================
-# Link Health Scanner — kagenti org
+# Link Health Scanner
 # Scans all repos for broken links, creates/closes GitHub issues, writes reports.
 #
 # Usage:
@@ -29,12 +29,36 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Resolve deployment constants (repos_dir, fork_owner) from ~/.repoman/config.json.
+repoman_config
+
 # --- Configuration ---
-REPOS_DIR="${REPOS_DIR:-$HOME/kagenti}"
-REPORTS_DIR="${REPORTS_DIR:-$HOME/workspaces/clawgenti/reports/link-scan}"
-KAGENTI_REPO="$REPOS_DIR/kagenti"
-FORK_REMOTE="clawgenti-kagenti-fork"
-FORK_OWNER="clawgenti"
+REPORTS_DIR="${REPORTS_DIR:-$HOME/reports/link-health}"
+
+# Report-PR destination. The org main repo's docs/ folder feeds the docs site
+# (rossoctl.dev) and cannot host machine-generated reports, so the standing
+# report PR lands under automation-health/ in the automation repo. A single
+# file, overwritten in place each run: trend tooling reconstructs history by
+# replaying git commit parents, so we store state (not dated snapshots) and
+# avoid the files-vs-diffs-on-Git anti-pattern (rossoctl/automation#44).
+# TODO(RepoMan Phase 2): move report_target_repo to programs/link-health.json.
+REPORT_TARGET_REPO="rossoctl/automation"
+REPORT_TARGET_OWNER="${REPORT_TARGET_REPO%%/*}"
+REPORT_TARGET_NAME="${REPORT_TARGET_REPO##*/}"
+REPORT_TARGET_PATH="automation-health/link-health.md"
+
+# Provenance footer for the report-PR body. Resolved once at startup: the
+# helper lazily writes _meta.<skill>.json beside this skill and returns the pinned-SHA
+# RepoMan attribution (blob/main fallback when the SHA cannot be resolved).
+SKILL_FOOTER=$(skill_attribution "link-health-scanner")
+
+# Clone dir for the report target: honor an explicit MAIN_REPO_DIR override,
+# else derive from the owner-namespaced layout ($REPOS_DIR/<owner>/<name>).
+REPORT_TARGET_DIR="${MAIN_REPO_DIR:-$REPOS_DIR/$REPORT_TARGET_OWNER/$REPORT_TARGET_NAME}"
+
+# Fork remote name for the report-target push. Derived from the profile so it
+# carries no org literal; a stale remote of this name is corrected below.
+FORK_REMOTE="$FORK_OWNER-automation-fork"
 SCAN_DATE=$(date -u +"%Y-%m-%d")
 SCAN_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 MAX_HISTORY_ROWS=500
@@ -63,35 +87,27 @@ REPOS_FAILED=0
 # Collect all broken links into a single JSONL file
 : > "$TMPDIR/broken.jsonl"
 
-# Track canonical repos already scanned this run, so duplicate clone dirs
-# (e.g. a stale "kagenti" alongside "rossoctl") are not scanned twice.
-SEEN_CANON=""
+# Drive the loop from the enrolled set (authoritative), statting each clone,
+# rather than globbing "$REPOS_DIR"/*/ and filtering -- a "*/" glob silently
+# drops a ".github" repo. enrolled_clone_dirs emits each enrolled owner/name
+# whose clone exists; the here-string keeps the body in the current shell so
+# counters accumulate.
+ENROLLED=$(repoman_load_enrolled) || exit 1
+CLONES=$(enrolled_clone_dirs "$ENROLLED")
 
-for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
-  [ -d "$repo_dir" ] || continue
-  repo_name=$(basename "$repo_dir")
+while IFS= read -r full_repo; do
+  [ -n "$full_repo" ] || continue
+  repo_dir="$REPOS_DIR/$full_repo"
 
-  # Skip hidden dirs (except .github) and non-git dirs
-  if [[ "$repo_name" == .* && "$repo_name" != ".github" ]] || [ ! -d "$repo_dir/.git" ]; then
-    continue
-  fi
+  echo "Scanning $full_repo..."
 
-  # Restrict to core repos (allowlist), mapping pre-rename dir names to their
-  # canonical repo first. Non-core / archived clones are skipped.
-  canon=$(canonical_repo_for_dir "$repo_name")
-  if ! is_core_repo "$canon"; then
-    continue
-  fi
-
-  # Dedup: skip if another clone dir already covered this canonical repo.
-  case " $SEEN_CANON " in
-    *" $canon "*) echo "Skipping $repo_name (already scanned as $canon)"; continue ;;
-  esac
-  SEEN_CANON="$SEEN_CANON $canon"
-
-  echo "Scanning $repo_name (as rossoctl/$canon)..."
-
-  LYCHEE_OUTPUT="$TMPDIR/lychee_${repo_name}.json"
+  # Key the temp file on the full owner/name (slash flattened to _), not the
+  # bare name: rossoctl/cortex and alice/cortex share a bare name, and keying
+  # on it would make the second scan overwrite the first (the [ ! -s ] guard
+  # cannot catch it -- the file is non-empty). That same-name-different-owner
+  # case is exactly what the owner-namespaced model exists to support.
+  safe_repo="${full_repo//\//_}"
+  LYCHEE_OUTPUT="$TMPDIR/lychee_${safe_repo}.json"
 
   # Run lychee -- scanner-level args applied to all repos
   LYCHEE_SCANNER_ARGS=(
@@ -115,7 +131,7 @@ for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
   fi
 
   if [ ! -s "$LYCHEE_OUTPUT" ]; then
-    echo "  WARN: lychee produced no output for $repo_name"
+    echo "  WARN: lychee produced no output for $full_repo"
     REPOS_FAILED=$((REPOS_FAILED + 1))
     continue
   fi
@@ -131,11 +147,11 @@ for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
   # normalization logic lives in extract-broken-links.sh so it can be unit-tested
   # (see tests/test-extract-broken-links.sh).
   "$SCRIPT_DIR/extract-broken-links.sh" \
-    "$LYCHEE_OUTPUT" "rossoctl/$canon" "$REPOS_DIR/$repo_name/" \
+    "$LYCHEE_OUTPUT" "$full_repo" "$repo_dir" \
     >> "$TMPDIR/broken.jsonl" 2>/dev/null || true
 
   echo "  Links: $repo_total, Errors: $repo_errors"
-done
+done <<< "$CLONES"
 
 echo ""
 echo "=== Scan complete ==="
@@ -238,7 +254,7 @@ The link should resolve to valid documentation.
 ## Additional Context
 
 Category: $link_category
-Detected by: OpenClaw Link Health Scanner (cron: link-health-scanner)"
+Detected by RepoMan Link Health Scanner (cron: link-health-scanner)"
 
   if [ "$DRY_RUN" = true ]; then
     echo "  [DRY RUN] Would create issue on $issue_repo: $issue_file:$issue_url ($link_category)"
@@ -348,6 +364,20 @@ HIST_EOF
 append_history_row "$REPORTS_DIR" "$HISTORY_ROW" "$MAX_HISTORY_ROWS"
 echo "Appended to history.json"
 
+# --- Register in the program registry (Phase 5) ---
+# The index lives beside the program report dirs (parent of REPORTS_DIR);
+# REPOMAN_INDEX_FILE overrides for tests/dogfood. A failed index write must
+# NOT fail an otherwise successful scan (the reports are the primary
+# product) -- but it is logged, not swallowed silently.
+index_file="${REPOMAN_INDEX_FILE:-$(dirname "$REPORTS_DIR")/_index.json}"
+if ! "$SCRIPT_DIR/repoman-index.sh" \
+      --index "$index_file" \
+      --program link-health \
+      --display-name "Link Health" \
+      --report-path "$REPORTS_DIR"; then
+  echo "WARNING: failed to update program registry at $index_file (scan reports were still written)" >&2
+fi
+
 # --- Update docs/link-health.md ---
 # Build trend table from last 10 history entries (deduplicate same-day rows)
 TREND_TABLE=$(jq -r '
@@ -357,11 +387,38 @@ TREND_TABLE=$(jq -r '
 
 # Build per-repo breakdown with issue counts
 # Single org-wide query for all open scanner issues, then count client-side
-issue_search=$(gh_with_backoff search issues "org:rossoctl in:title \"Broken link in\" state:open" --json repository --jq '.[].repository.nameWithOwner' 2>/dev/null || true)
-declare -A ISSUE_COUNTS
+issue_search=$(gh_with_backoff search issues "org:${REPORT_TARGET_REPO%%/*} in:title \"Broken link in\" state:open" --json repository --jq '.[].repository.nameWithOwner' 2>/dev/null || true)
+# bash 3.2 (macOS default) has no associative arrays. Keep counts in a
+# newline-delimited accumulator of "repo<TAB>count" rows; repo keys are
+# owner/name (no whitespace), so tab-splitting is unambiguous.
+ISSUE_COUNTS=""   # rows of "repo<TAB>count"
+
+_lhs_ic_get() {   # $1=repo -> prints its count, or 0 if absent
+  printf '%s\n' "$ISSUE_COUNTS" \
+    | awk -F'\t' -v r="$1" '$1==r{c=$2; found=1} END{print (found ? c : 0)}'
+}
+_lhs_ic_incr() {  # $1=repo -> increment its count by 1
+  local cur rest
+  cur=$(_lhs_ic_get "$1")
+  # Drop any existing row for this repo. Guard the empty case so we do not
+  # feed awk a lone blank record (which would echo back an empty row).
+  if [ -n "$ISSUE_COUNTS" ]; then
+    rest=$(printf '%s\n' "$ISSUE_COUNTS" | awk -F'\t' -v r="$1" '$1!=r')
+  else
+    rest=""
+  fi
+  # Append the new count, keeping the accumulator free of leading blank rows.
+  if [ -n "$rest" ]; then
+    ISSUE_COUNTS="${rest}
+$1	$(( cur + 1 ))"
+  else
+    ISSUE_COUNTS="$1	$(( cur + 1 ))"
+  fi
+}
+
 if [ -n "$issue_search" ]; then
   while IFS= read -r r; do
-    ISSUE_COUNTS["$r"]=$(( ${ISSUE_COUNTS["$r"]:-0} + 1 ))
+    _lhs_ic_incr "$r"
   done <<< "$issue_search"
 fi
 
@@ -379,7 +436,7 @@ if [ -n "$repo_breakdown" ]; then
     short=$(echo "$repo" | cut -d/ -f2)
     int_count=$(echo "$row" | jq -r '.internal')
     ext_count=$(echo "$row" | jq -r '.external')
-    issue_count=${ISSUE_COUNTS["$repo"]:-0}
+    issue_count=$(_lhs_ic_get "$repo")
     REPO_TABLE="${REPO_TABLE}| ${short} | ${int_count} | ${ext_count} | ${issue_count} |
 "
   done < <(echo "$repo_breakdown" | jq -c '.')
@@ -420,21 +477,30 @@ $REPO_TABLE
 *Issues counts open GitHub issues filed by the scanner; a broken link may not yet have an issue (due to per-run limits) or may share an issue with another link in the same file.*
 
 ---
-*Generated by OpenClaw Link Health Scanner. Do not edit manually.*
+*Generated by RepoMan Link Health Scanner. Do not edit manually.*
 DASHBOARD_EOF
 
 # Commit and push dashboard
 if [ "$DRY_RUN" = true ]; then
-  echo "[DRY RUN] Would push docs/link-health.md to fork and create/update cross-fork PR"
+  echo "[DRY RUN] Would push $REPORT_TARGET_PATH to fork and create/update cross-fork PR against $REPORT_TARGET_REPO"
   echo "[DRY RUN] Dashboard preview:"
   cat "$TMPDIR/link-health.md"
 else
-  cd "$KAGENTI_REPO"
-
-  # Ensure fork remote exists
-  if ! git remote get-url "$FORK_REMOTE" &>/dev/null; then
-    git remote add "$FORK_REMOTE" "https://github.com/$FORK_OWNER/kagenti.git"
+  if [ ! -d "$REPORT_TARGET_DIR/.git" ]; then
+    echo "ERROR: $REPORT_TARGET_DIR does not appear to be a git repository."
+    echo "Export MAIN_REPO_DIR or set REPOS_DIR so $REPORT_TARGET_REPO can be found:"
+    echo "  export MAIN_REPO_DIR=$REPOS_DIR/$REPORT_TARGET_OWNER/$REPORT_TARGET_NAME"
+    exit 1
   fi
+
+  cd "$REPORT_TARGET_DIR"
+
+  # Ensure the fork remote exists AND points at the current target. set-url
+  # corrects a stale remote (e.g. one left by a prior deployment pointing at the
+  # old report repo); the || add branch handles the not-yet-registered case.
+  fork_url="https://github.com/$FORK_OWNER/${REPORT_TARGET_NAME}.git"
+  git remote set-url "$FORK_REMOTE" "$fork_url" 2>/dev/null \
+    || git remote add "$FORK_REMOTE" "$fork_url"
 
   # Fetch fork's branch if it exists, otherwise create from main
   if git fetch "$FORK_REMOTE" link-health/reports 2>/dev/null; then
@@ -445,19 +511,19 @@ else
       || git checkout -B link-health/reports
   fi
 
-  mkdir -p docs
-  cp "$TMPDIR/link-health.md" docs/link-health.md
-  git add docs/link-health.md
+  mkdir -p "$(dirname "$REPORT_TARGET_PATH")"
+  cp "$TMPDIR/link-health.md" "$REPORT_TARGET_PATH"
+  git add "$REPORT_TARGET_PATH"
   git commit -s -m "docs: Update link health dashboard ($SCAN_ID)" 2>/dev/null || echo "No changes to commit"
   git push "$FORK_REMOTE" link-health/reports 2>/dev/null || echo "WARN: Failed to push dashboard to fork"
 
   # Create or update standing cross-fork PR
-  existing_pr=$(gh api "repos/kagenti/kagenti/pulls?head=$FORK_OWNER:link-health/reports&state=open" \
+  existing_pr=$(gh api "repos/$REPORT_TARGET_REPO/pulls?head=$FORK_OWNER:link-health/reports&state=open" \
     --jq '.[0].number' 2>/dev/null || echo "")
 
   pr_body="## Summary
 
-Auto-updated by Kagenti Link Health Scanner. This PR is continuously updated with each scan. Merge when convenient.
+Auto-updated by RepoMan Link Health Scanner. This PR is continuously updated with each scan. Merge when convenient.
 
 | Metric | Value |
 |--------|-------|
@@ -469,15 +535,19 @@ Auto-updated by Kagenti Link Health Scanner. This PR is continuously updated wit
 
 ## Related issue(s)
 
-- kagenti/kagenti#1178"
+- $REPORT_TARGET_REPO#1178
+
+## Automation program
+
+$SKILL_FOOTER"
 
   if [ -z "$existing_pr" ] || [ "$existing_pr" = "null" ]; then
-    gh pr create --repo kagenti/kagenti \
+    gh pr create --repo "$REPORT_TARGET_REPO" \
       --head "$FORK_OWNER:link-health/reports" --base main \
       --title "docs: Link health report (auto-updated)" \
       --body "$pr_body" 2>/dev/null || echo "WARN: Failed to create dashboard PR"
   else
-    gh pr edit "$existing_pr" --repo kagenti/kagenti --body "$pr_body" 2>/dev/null || true
+    gh pr edit "$existing_pr" --repo "$REPORT_TARGET_REPO" --body "$pr_body" 2>/dev/null || true
   fi
 fi
 
@@ -488,7 +558,7 @@ if [ "$NEW_LINKS" -gt "$ESCALATION_THRESHOLD" ]; then
   echo ""
   echo "ALERT: Link health scan found $NEW_LINKS new broken links (threshold: $ESCALATION_THRESHOLD)."
   echo "This may indicate a bulk documentation change or a widespread external service outage."
-  echo "Review issues at https://github.com/kagenti/kagenti/issues?q=label:broken-link"
+  echo "Review issues at https://github.com/$REPORT_TARGET_REPO/issues?q=label:broken-link"
 fi
 
 # --- Summary ---

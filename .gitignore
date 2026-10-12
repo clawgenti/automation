@@ -1,2 +1,10 @@
 reports/
 *.log
+
+# Local copies of host cron/job state (contains deployment internals; never commit)
+.host-backup/
+.claude/settings.local.json
+
+# Per-skill provenance written at runtime by resolve_skill_meta (github-api.sh);
+# pinned to each checkout, never source-of-truth.
+_meta.*.json

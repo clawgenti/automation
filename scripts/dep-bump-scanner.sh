@@ -2,14 +2,13 @@
 set -euo pipefail
 
 # =============================================================================
-# Dependency Bump Scanner — rossoctl org
+# Dependency Bump Scanner
 # Monitors Dependabot PRs, classifies by severity, flags SLA breaches,
 # creates/closes GitHub issues, writes reports.
 #
 # Usage:
 #   bash dep-bump-scanner.sh --help
 #   bash dep-bump-scanner.sh --dry-run
-#   bash dep-bump-scanner.sh --dry-run --org rossoctl
 #   bash dep-bump-scanner.sh --issue-limit 3
 # =============================================================================
 
@@ -21,14 +20,12 @@ source "$SCRIPT_DIR/program-lib.sh"
 # --- CLI args ---
 DRY_RUN=false
 ISSUE_LIMIT=0  # 0 = unlimited
-ORG="rossoctl"  # display/report-tag only; repo reads use canonical rossoctl/<name> (see get_core_repos)
 SHOW_HELP=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     --dry-run) DRY_RUN=true; shift ;;
     --issue-limit) ISSUE_LIMIT="$2"; shift 2 ;;
-    --org) ORG="$2"; shift 2 ;;
     --help|-h) SHOW_HELP=true; shift ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
@@ -44,12 +41,11 @@ USAGE:
 OPTIONS:
   --dry-run         Scan and report only; do not create/close issues
   --issue-limit N   Create at most N issues per run (0 = unlimited)
-  --org NAME        GitHub org to scan (default: rossoctl)
   --help, -h        Show this help
 
 ENVIRONMENT:
   REPOS_DIR         (required) Directory containing cloned org repos
-  REPORTS_DIR       (optional) Where to write reports (default: ./reports/dep-bump)
+  REPORTS_DIR       (optional) Where to write reports (default: ~/reports/dep-bump)
 
 PREREQUISITES:
   bash 4+, gh (authenticated), jq
@@ -64,14 +60,22 @@ USAGE
   exit 0
 fi
 
+# Resolve deployment constants (repos_dir, fork_owner) from ~/.repoman/config.json.
+repoman_config
+
 # --- Configuration ---
 validate_repos_dir "${REPOS_DIR:-}"
 
-REPORTS_DIR="${REPORTS_DIR:-./reports/dep-bump}"
+REPORTS_DIR="${REPORTS_DIR:-$HOME/reports/dep-bump}"
 SCAN_DATE=$(date -u +"%Y-%m-%d")
 SCAN_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 MAX_HISTORY_ROWS=500
 ESCALATION_THRESHOLD=5
+
+# Provenance footer for the issue bodies this scanner creates. Resolved once at
+# startup: the helper lazily writes _meta.<skill>.json beside this skill and returns the
+# pinned-SHA RepoMan attribution (blob/main fallback when the SHA is unresolved).
+SKILL_FOOTER=$(skill_attribution "dep-bump-scanner")
 
 # SLA thresholds (days)
 SLA_CRITICAL=3
@@ -89,7 +93,6 @@ mkdir -p "$REPORTS_DIR"
 SCAN_ID=$(generate_scan_id "$REPORTS_DIR" "$SCAN_DATE")
 
 echo "=== Dep Bump Scan $SCAN_ID ==="
-echo "Org: $ORG"
 echo "Repos dir: $REPOS_DIR"
 echo "Reports dir: $REPORTS_DIR"
 if [ "$DRY_RUN" = true ]; then echo "Mode: DRY RUN (no issues)"; fi
@@ -102,26 +105,17 @@ echo "--- Detecting ecosystems ---"
 : > "$TMPDIR/ecosystems.jsonl"
 REPOS_SCANNED=0
 
-SEEN_CANON=""
-for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
-  [ -d "$repo_dir" ] || continue
-  repo_name=$(basename "$repo_dir")
+# Drive the loop from the enrolled set (authoritative), statting each clone,
+# rather than globbing "$REPOS_DIR"/*/ and filtering -- a "*/" glob silently
+# drops a ".github" repo. enrolled_clone_dirs emits each enrolled owner/name
+# whose clone exists; the here-string keeps the body in the current shell so
+# counters accumulate.
+ENROLLED=$(repoman_load_enrolled) || exit 1
+CLONES=$(enrolled_clone_dirs "$ENROLLED")
 
-  # Skip hidden dirs (except .github) and non-git dirs
-  if [[ "$repo_name" == .* && "$repo_name" != ".github" ]] || [ ! -d "$repo_dir/.git" ]; then
-    continue
-  fi
-
-  # Restrict to core repos (allowlist) via the canonical name; dedup duplicate
-  # clone dirs so each canonical repo is processed once.
-  canon=$(canonical_repo_for_dir "$repo_name")
-  if ! is_core_repo "$canon"; then
-    continue
-  fi
-  case " $SEEN_CANON " in
-    *" $canon "*) continue ;;
-  esac
-  SEEN_CANON="$SEEN_CANON $canon"
+while IFS= read -r full_repo; do
+  [ -n "$full_repo" ] || continue
+  repo_dir="$REPOS_DIR/$full_repo"
 
   REPOS_SCANNED=$((REPOS_SCANNED + 1))
   ecosystems=""
@@ -159,11 +153,11 @@ for repo_dir in "$REPOS_DIR"/*/ "$REPOS_DIR"/.github/; do
   # Strip trailing comma
   ecosystems="${ecosystems%,}"
 
-  # Store the canonical repo name so Step 2 builds correct rossoctl/<name> refs.
-  jq -nc --arg repo "$canon" --arg eco "$ecosystems" \
+  # Store the full owner/name so Step 2 builds correct refs directly.
+  jq -nc --arg repo "$full_repo" --arg eco "$ecosystems" \
     '{repo: $repo, ecosystems: ($eco | split(",") | map(select(. != "")))}' \
     >> "$TMPDIR/ecosystems.jsonl"
-done
+done <<< "$CLONES"
 
 echo "Detected ecosystems for $REPOS_SCANNED repos"
 
@@ -176,10 +170,9 @@ REPOS_WITH_DEPENDABOT=0
 TOTAL_OPEN_PRS=0
 
 while IFS= read -r eco_record; do
-  repo_name=$(echo "$eco_record" | jq -r '.repo')   # canonical name from Step 1
-  full_repo="rossoctl/$repo_name"
+  full_repo=$(echo "$eco_record" | jq -r '.repo')   # full owner/name from Step 1
 
-  echo "  Checking $repo_name..."
+  echo "  Checking $full_repo..."
 
   # List open Dependabot PRs. Query the canonical repo directly -- gh pr list
   # with --author silently returns empty across a rename redirect, which is why
@@ -207,7 +200,7 @@ while IFS= read -r eco_record; do
   fi
 
   # Process each PR: classify severity, compute age, determine staleness
-  echo "$prs_json" | jq -c --arg repo "$repo_name" --arg org "$ORG" \
+  echo "$prs_json" | jq -c --arg repo "$full_repo" \
     --arg scan_date "$SCAN_DATE" \
     --argjson sla_critical "$SLA_CRITICAL" \
     --argjson sla_high "$SLA_HIGH" \
@@ -318,11 +311,12 @@ echo "--- Dependabot coverage audit ---"
 : > "$TMPDIR/coverage_gaps.jsonl"
 
 while IFS= read -r eco_record; do
-  repo_name=$(echo "$eco_record" | jq -r '.repo')
+  # .repo is the full owner/name; the clone lives at $REPOS_DIR/<owner>/<name>.
+  full_repo=$(echo "$eco_record" | jq -r '.repo')
   detected=$(echo "$eco_record" | jq -r '.ecosystems | join(",")')
 
-  dependabot_yml="$REPOS_DIR/$repo_name/.github/dependabot.yml"
-  dependabot_yaml="$REPOS_DIR/$repo_name/.github/dependabot.yaml"
+  dependabot_yml="$REPOS_DIR/$full_repo/.github/dependabot.yml"
+  dependabot_yaml="$REPOS_DIR/$full_repo/.github/dependabot.yaml"
 
   config_file=""
   if [ -f "$dependabot_yml" ]; then
@@ -368,7 +362,7 @@ while IFS= read -r eco_record; do
     gaps="${gaps%,}"
 
     if [ -n "$gaps" ]; then
-      jq -nc --arg repo "$repo_name" --arg detected "$detected" \
+      jq -nc --arg repo "$full_repo" --arg detected "$detected" \
         --arg configured "$configured" --arg gaps "$gaps" \
         '{repo: $repo, has_config: true,
           detected: ($detected | split(",")),
@@ -433,8 +427,8 @@ while IFS='|' read -r issue_repo issue_pr_number; do
   category=$(echo "$record" | jq -r '.category')
   overdue=$((age_days - sla_days))
 
-  # Record repos are canonical names (see Step 1); build canonical refs.
-  full_repo="rossoctl/$issue_repo"
+  # issue_repo now carries full owner/name from Step 1 JSONL
+  full_repo="$issue_repo"
 
   # Deduplication
   search_term="[dep-bump] Stale $severity bump: $package in $issue_repo"
@@ -488,7 +482,9 @@ Dependabot PRs should be reviewed and merged within the SLA window.
 ## Additional Context
 
 Category: $category
-Detected by: OpenClaw Dep Bump Scanner (scan $SCAN_ID)"
+
+---
+$SKILL_FOOTER (scan $SCAN_ID)"
 
   if [ "$DRY_RUN" = true ]; then
     echo "  [DRY RUN] Would create issue: $issue_title"
@@ -513,7 +509,7 @@ ISSUES_CLOSED=0
 while IFS='|' read -r fix_repo fix_pr_number; do
   [ -z "$fix_repo" ] && continue
 
-  full_repo="rossoctl/$fix_repo"
+  full_repo="$fix_repo"
 
   # Find matching open issue by searching for the PR number in title/body
   issue_number=$(gh issue list --repo "$full_repo" \
@@ -546,7 +542,6 @@ LATEST_JSON=$(jq -nc \
   --arg scan_id "$SCAN_ID" \
   --arg date "$SCAN_TIME" \
   --argjson duration "$SECONDS" \
-  --arg org "$ORG" \
   --argjson repos_scanned "$REPOS_SCANNED" \
   --argjson repos_with_dependabot "$REPOS_WITH_DEPENDABOT" \
   --argjson total_open_prs "$TOTAL_OPEN_PRS" \
@@ -556,7 +551,7 @@ LATEST_JSON=$(jq -nc \
   --argjson new_count "$NEW_STALE" \
   --argjson fixed_count "$FIXED_STALE" \
   --argjson recurring_count "$RECURRING_STALE" \
-  '{scan_id: $scan_id, date: $date, duration_seconds: $duration, org: $org,
+  '{scan_id: $scan_id, date: $date, duration_seconds: $duration,
     repos_scanned: $repos_scanned, repos_with_dependabot: $repos_with_dependabot,
     total_open_prs: $total_open_prs, stale_prs: $stale_prs,
     coverage_gaps: $coverage_gaps, ecosystem_summary: $ecosystem_summary,
@@ -573,7 +568,6 @@ STALE_ROUTINE=$(jq -s '[.[] | select(.category == "routine")] | length' "$TMPDIR
 HISTORY_ROW=$(jq -nc \
   --arg scan_id "$SCAN_ID" \
   --arg date "$SCAN_TIME" \
-  --arg org "$ORG" \
   --argjson repos_scanned "$REPOS_SCANNED" \
   --argjson total_open_prs "$TOTAL_OPEN_PRS" \
   --argjson stale_security "$STALE_SECURITY" \
@@ -583,7 +577,7 @@ HISTORY_ROW=$(jq -nc \
   --argjson fixed_count "$FIXED_STALE" \
   --argjson issues_created "$ISSUES_CREATED" \
   --argjson issues_closed "$ISSUES_CLOSED" \
-  '{scan_id: $scan_id, date: $date, org: $org,
+  '{scan_id: $scan_id, date: $date,
     repos_scanned: $repos_scanned, total_open_prs: $total_open_prs,
     stale_security: $stale_security, stale_major: $stale_major,
     stale_routine: $stale_routine,
@@ -593,18 +587,31 @@ HISTORY_ROW=$(jq -nc \
 append_history_row "$REPORTS_DIR" "$HISTORY_ROW" "$MAX_HISTORY_ROWS"
 echo "Appended to $REPORTS_DIR/history.json"
 
+# --- Register in the program registry (Phase 5) ---
+# The index lives beside the program report dirs (parent of REPORTS_DIR);
+# REPOMAN_INDEX_FILE overrides for tests/dogfood. A failed index write must
+# NOT fail an otherwise successful scan (the reports are the primary
+# product) -- but it is logged, not swallowed silently.
+index_file="${REPOMAN_INDEX_FILE:-$(dirname "$REPORTS_DIR")/_index.json}"
+if ! "$SCRIPT_DIR/repoman-index.sh" \
+      --index "$index_file" \
+      --program dep-bump \
+      --display-name "Dependency Bumps" \
+      --report-path "$REPORTS_DIR"; then
+  echo "WARNING: failed to update program registry at $index_file (scan reports were still written)" >&2
+fi
+
 # --- Escalation check ---
 if [ "$NEW_STALE" -gt "$ESCALATION_THRESHOLD" ]; then
   echo ""
   echo "ALERT: Dep bump scan found $NEW_STALE new stale PRs (threshold: $ESCALATION_THRESHOLD)."
   echo "This may indicate a Dependabot wave or security advisory affecting many packages."
-  echo "Review PRs at https://github.com/orgs/$ORG/dependabot"
+  echo "Review Dependabot PRs in each enrolled repo's Security tab."
 fi
 
 # --- Summary ---
 echo ""
 echo "=== Scan $SCAN_ID Summary ==="
-echo "Org: $ORG"
 echo "Repos: $REPOS_SCANNED scanned, $REPOS_WITH_DEPENDABOT with Dependabot PRs"
 echo "PRs: $TOTAL_OPEN_PRS open, $STALE_COUNT stale ($STALE_SECURITY security, $STALE_MAJOR major, $STALE_ROUTINE routine)"
 echo "Delta: +$NEW_STALE new, -$FIXED_STALE fixed, $RECURRING_STALE recurring"
