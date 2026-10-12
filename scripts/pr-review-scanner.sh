@@ -10,6 +10,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/program-lib.sh"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/pr-review-lib.sh"
 
 # --- CLI args ---
 VERBOSE=false
@@ -80,7 +82,9 @@ fi
 LABEL="ready-for-ai-review"
 REVIEW_MARKER="<!-- reviewed:"
 STALE_THRESHOLD_MIN=30
-TTL_DAYS=30
+# Single source of truth: the lib stamps acted_on.ttl_days with this same value,
+# so the scanner's eviction and the persisted TTL cannot drift (sourced above).
+TTL_DAYS="$PR_REVIEW_TTL_DAYS"
 MAX_HISTORY_ROWS=500
 
 # --- Workspace and reports setup ---
@@ -95,13 +99,9 @@ SCAN_ID=$(generate_scan_id "$REPORTS_DIR" "$SCAN_DATE")
 
 [ "$VERBOSE" = true ] && echo "Scan ID: $SCAN_ID | Reports: $REPORTS_DIR" >&2
 
-# --- Load state (with schema validation) ---
+# --- Load state (envelope-aware; migrates legacy in memory) ---
 STATE_FILE="$REPORTS_DIR/state.json"
-STATE_DEFAULT='{"in_progress": [], "reviewed": []}'
-STATE_CHECK='(.in_progress | type) == "array" and (.reviewed | type) == "array"'
-
-validate_json_schema "$STATE_FILE" "$STATE_CHECK" "$STATE_DEFAULT"
-cp "$STATE_FILE" "$TMPDIR/state.json"
+pr_review_state_load "$STATE_FILE" > "$TMPDIR/state.json"
 
 # --- Step 1: List labeled PRs across target repos ---
 QUEUE_FILE="$TMPDIR/queue.json"
@@ -327,8 +327,8 @@ else
   write_report_latest "$REPORTS_DIR" "$LATEST_JSON"
   [ "$VERBOSE" = true ] && echo "Wrote $REPORTS_DIR/latest.json" >&2
 
-  # state.json (atomic write from file, avoids argument-length limits)
-  atomic_write_file "$TMPDIR/state.json" "$REPORTS_DIR/state.json"
+  # state.json (envelope v1, atomic write from file)
+  pr_review_state_write "$TMPDIR/state.json" "$REPORTS_DIR/state.json" "pr-review-scanner"
   [ "$VERBOSE" = true ] && echo "Wrote $REPORTS_DIR/state.json" >&2
 
   # history.json
