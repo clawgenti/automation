@@ -84,8 +84,9 @@ check "state.json exists" "[ -f '$REPORTS_DIR/state.json' ]"
 check "history.json exists" "[ -f '$REPORTS_DIR/history.json' ]"
 check "latest.json has scan_id" "jq -e '.scan_id' '$REPORTS_DIR/latest.json' >/dev/null 2>&1"
 check "latest.json has eligible_prs array" "jq -e '.eligible_prs | type == \"array\"' '$REPORTS_DIR/latest.json' >/dev/null 2>&1"
-check "state.json has in_progress array" "jq -e '.in_progress | type == \"array\"' '$REPORTS_DIR/state.json' >/dev/null 2>&1"
-check "state.json has reviewed array" "jq -e '.reviewed | type == \"array\"' '$REPORTS_DIR/state.json' >/dev/null 2>&1"
+check "state.json is envelope v1" "jq -e '.schema_version == 1' '$REPORTS_DIR/state.json' >/dev/null 2>&1"
+check "state.json has acted_on object" "jq -e '.acted_on | type == \"object\"' '$REPORTS_DIR/state.json' >/dev/null 2>&1"
+check "state.json has program_data.in_progress array" "jq -e '.program_data.in_progress | type == \"array\"' '$REPORTS_DIR/state.json' >/dev/null 2>&1"
 
 echo ""
 
@@ -139,7 +140,7 @@ else
   fi
 
   # Dry-run: state.json should NOT have changed
-  check "dry-run did not write state" "[ \$(jq '.in_progress | length' '$REPORTS_DIR/state.json') -eq 0 ]"
+  check "dry-run did not write state" "[ \$(jq '.program_data.in_progress | length' '$REPORTS_DIR/state.json') -eq 0 ]"
   echo ""
 fi
 
@@ -154,7 +155,7 @@ if [ "$ELIGIBLE_COUNT" -gt 0 ] || [ -n "$TEST_PR" ]; then
     > "$TMPDIR/fixer_live_output.json" \
     2>"$TMPDIR/fixer_live_stderr.txt"
 
-  check "live mode wrote state.json" "[ \$(jq '.in_progress | length' '$REPORTS_DIR/state.json') -gt 0 ]"
+  check "live mode wrote state.json" "[ \$(jq '.program_data.in_progress | length' '$REPORTS_DIR/state.json') -gt 0 ]"
   echo ""
 
   # --- Phase 4: Fixer finalize ---
