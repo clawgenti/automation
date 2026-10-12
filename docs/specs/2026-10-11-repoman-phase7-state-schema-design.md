@@ -93,39 +93,55 @@ anything else (leases, counters, cursors) → `program_data`.
 Lazy, trigger = **absent `schema_version`**:
 
 ```
-load state.json
+load state.json  (pr_review_state_load)
   |> .schema_version present?
-       yes -> use as-is
-       no  -> legacy v0: wrap { in_progress, reviewed } into envelope v1
-              in memory (reviewed[] -> acted_on, in_progress -> program_data)
-  ... normal scan/fix ...
-write envelope v1 (atomic)        # legacy shape never written again
+       yes -> envelope v1: unwrap to the WORKING shape in memory
+              (acted_on -> reviewed[], program_data.in_progress -> in_progress)
+       no  -> legacy v0 { in_progress, reviewed } arrays: pass through as-is
+              (already the working shape)
+  ... normal scan/fix: the ~15 inline jq blocks operate on the WORKING shape ...
+write state.json (pr_review_state_write)
+  |> wrap WORKING shape back into envelope v1, atomic write
+     # legacy shape never written again
 ```
 
-A missing file is initialized directly as an empty envelope v1 (no migration
-path needed). No explicit version-dispatch function yet — a single `0 -> 1`
-transform inline is enough; a `migrate(from_version)` dispatcher is deferred to
-whenever a `schema_version: 2` first exists (YAGNI).
+The on-disk form is always envelope v1; the in-memory form the scanner/fixer jq
+blocks manipulate is the **working shape** `{reviewed, in_progress}`. All
+envelope knowledge lives at the two conversion boundaries (load/write) so the
+inline jq blocks stay untouched. A missing file yields the empty working shape
+in memory, which `pr_review_state_write` then persists as an empty envelope v1
+on the first write. No explicit version-dispatch function yet — a single inline
+`0 -> working` unwrap is enough; a `migrate(from_version)` dispatcher is
+deferred to whenever a `schema_version: 2` first exists (YAGNI).
 
 ## Helpers (`scripts/pr-review-lib.sh`)
 
 A new automation-only lib, sourced by both pr-review scripts after
-`program-lib.sh` (so `jq`, `validate_json_schema`, `atomic_write_file` from
-`core.sh` are already available). Three functions:
+`program-lib.sh` (so `jq` and `atomic_write_file` from `core.sh` are already
+available). It is NOT vendored to agent-skills and NOT part of
+`core.sh`/`program-lib.sh`. Two functions plus a working-shape default
+constant (`PR_REVIEW_WORKING_DEFAULT='{"in_progress": [], "reviewed": []}'`):
 
-- `pr_review_state_load <state_file>` — reads the file (or empty default),
-  migrates legacy → v1 in memory, validates the envelope, and emits the v1 JSON
-  on stdout. Replaces the current inline `STATE_DEFAULT`/`STATE_CHECK` +
-  `validate_json_schema` block duplicated in both scripts.
-- `pr_review_state_reviewed_add <state_json> <repo> <number> <sha> <ts>` and the
-  eviction/read accessors stay thin wrappers over `jq` on the `acted_on` map, so
-  the scanner's existing TTL/stale eviction logic operates on envelope fields
-  instead of the bare lists.
-- `pr_review_state_write <tmp_json> <dest>` — thin pass-through to
-  `atomic_write_file` (kept for symmetry and a single write site).
+- `pr_review_state_load <state_file>` — emits the WORKING shape
+  `{reviewed, in_progress}` on stdout. Handles envelope v1 (unwraps
+  `acted_on` → `reviewed[]` and `program_data.in_progress` → `in_progress`),
+  legacy v0 arrays (passes through), a missing file (empty working shape), and
+  invalid JSON (empty working shape, non-destructive — the bad file is logged to
+  stderr but not rewritten, unlike `validate_json_schema` which resets on
+  invalid). Replaces the inline `STATE_DEFAULT`/`validate_json_schema` block
+  duplicated in both scripts.
+- `pr_review_state_write <working_json_file> <dest_file> <program_id>` — wraps
+  the working shape into envelope v1 (building `acted_on` from `reviewed[]` keyed
+  `<repo>:<number>` with `at`/`ttl_days`/`head_sha`, and
+  `program_data.in_progress` from `in_progress`), stamping the given
+  `program_id`, then atomically writes via `atomic_write_file`.
 
-The validation check becomes:
-`(.schema_version | type) == "number" and (.acted_on | type) == "object" and (.program_data | type) == "object"`.
+No `acted_on` accessor helpers exist: the scanner's TTL/stale eviction and the
+fixer's reviewed/in_progress transitions remain the existing inline jq blocks
+operating on the working shape, so they were not rewritten. Envelope validation
+is implicit in `pr_review_state_load`'s `jq` conversion (invalid or
+unrecognized input falls through to the empty working shape); there is no
+separate boolean validation expression.
 
 ## Testing
 
@@ -136,14 +152,20 @@ Two test files are in play; both run in CI today (the run list in
 `Run test suite` loop and the `shellcheck (repoman tests)` group. This is Phase
 7's coverage of record. Cases:
 
-1. Missing file → `pr_review_state_load` yields an empty envelope v1
-   (`schema_version==1`, empty `acted_on`, empty `program_data.in_progress`).
-2. Legacy `{in_progress,reviewed}` file → migrated: a `reviewed` entry appears
-   under `acted_on` with `at`/`ttl_days`/`head_sha`; `in_progress` preserved
-   under `program_data`; `schema_version==1`.
-3. Already-v1 file → round-trips unchanged.
-4. Corrupt/invalid JSON → falls back to empty envelope v1 (matching the current
-   `validate_json_schema` default-on-invalid behavior).
+1. Missing file → `pr_review_state_load` yields the empty working shape
+   (empty `reviewed`, empty `in_progress`). The envelope only materializes on
+   write.
+2. Legacy `{in_progress,reviewed}` file → `pr_review_state_load` passes the two
+   arrays through unchanged (they are already the working shape).
+3. `pr_review_state_write` on a working shape → produces envelope v1:
+   `schema_version==1`, the `program_id` recorded, each `reviewed` entry keyed
+   `<repo>:<number>` under `acted_on` carrying `at`/`ttl_days`/`head_sha`, and
+   `in_progress` under `program_data.in_progress`.
+4. Round-trip (`write` then `load`) → `reviewed`/`in_progress` fields survive;
+   `reviewed_at` is reconstructed from the envelope's `at`.
+5. Corrupt/invalid JSON → `pr_review_state_load` falls back to the empty working
+   shape without rewriting the bad file (non-destructive, unlike
+   `validate_json_schema`'s reset-on-invalid).
 
 **Required update: `tests/test-pr-review-integration.sh`** — this test *is*
 wired into CI (re-included hermetically via a `REPOMAN_REPOS_FILE` stub; the
