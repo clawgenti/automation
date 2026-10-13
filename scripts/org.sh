@@ -212,6 +212,33 @@ enrolled_clone_dirs() {
   done
 }
 
+# Emit every enrolled "owner/name" whose NAME component == <bare-name> ($1),
+# one per line, in enrolled (file) order. Zero matches -> no output, return 0
+# (the caller distinguishes 0/1/>=2 matches by counting output lines, mapping
+# onto the entrypoint skill's reconciliation rules 5/3/4). Drives from
+# repoman_get_repos, so it honors $REPOMAN_REPOS_FILE and PROPAGATES its
+# fail-loud behavior on a missing/empty/malformed file -- a read failure must
+# not look like "zero matches", so capture-then-iterate (not a bare pipe, whose
+# exit would be the while's 0 regardless of the left side). Whole-name match via
+# suffix strip (${line##*/}), substring-safe: "cort" never matches "cortex".
+# bash 3.2-safe: no mapfile, no associative arrays.
+# Args: $1 - bare repo name (no owner, no slash)
+repoman_match_name() {
+  local want="$1" line repos
+  repos=$(repoman_get_repos) || return 1
+  printf '%s\n' "$repos" | while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    # Must end the loop body with a 0-status command: a trailing non-matching
+    # line would otherwise leave `[ ... ] && printf` at exit 1, making the while
+    # (and the whole pipe) return 1 on a successful "no match for the last
+    # repo", which a `set -e` caller reads as a hard failure. The `if` guard
+    # keeps the body's final status 0 regardless of whether this line matched.
+    if [ "${line##*/}" = "$want" ]; then
+      printf '%s\n' "$line"
+    fi
+  done
+}
+
 # =============================================================================
 # REPO SELECTION
 # =============================================================================
