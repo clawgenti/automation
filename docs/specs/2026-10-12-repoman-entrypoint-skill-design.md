@@ -254,10 +254,15 @@ not one of the five.
 **Q1 path rejection.** `validate_repos_dir`
 ([`org.sh:36`](https://github.com/rossoctl/automation/blob/c2af03e50949bdeb231c3581f07e4350ed65f8e0/scripts/org.sh#L36))
 rejects empty values,
-dangerous system paths, `$HOME` itself, and non-existent dirs. The default
-`~/repoman/repos` is a subdir and passes. If a user-offered path is rejected,
-the skill re-prompts with the specific reason the validator gave — it does not
-silently fall back to the default.
+dangerous system paths, `$HOME` itself, and non-existent dirs. The last clause
+matters on a fresh system: `~/repoman/repos` is a safe subdir path, but it does
+not exist until something creates it, and `init-config` only `mkdir -p`s the
+config file's parent under `~/.repoman/` — never `--repos-dir`. So before
+calling `init-config` the skill driver must `mkdir -p` the chosen repos dir.
+That directory lives outside `~/.repoman/`, so creating it does not violate the
+writer invariant (which guards only `~/.repoman/` state). If a user-offered path
+is rejected for any other reason, the skill re-prompts with the specific reason
+the validator gave — it does not silently fall back to the default.
 
 **Q3 requirement wiring (the documented contract at
 [`repoman-setup.sh:493`](https://github.com/rossoctl/automation/blob/c2af03e50949bdeb231c3581f07e4350ed65f8e0/scripts/repoman-setup.sh#L493)).**
@@ -395,12 +400,22 @@ primitive-in-automation / skill-in-agent-skills split.
 # repoman_match_name <bare-name>
 # Emits every enrolled "owner/name" whose name == <bare-name>, one per line.
 # Zero matches  -> no output, return 0 (caller distinguishes via empty output).
-# Reads the enrolled set via repoman_get_repos (honoring REPOMAN_REPOS_FILE).
+# Reads the enrolled set via repoman_get_repos (honoring REPOMAN_REPOS_FILE);
+# propagates its fail-loud behavior (empty/malformed set -> return 1).
 # bash 3.2-safe: no mapfile, no associative arrays.
 repoman_match_name() {
-  local want="$1" line
-  repoman_get_repos | while IFS= read -r line; do
-    [ "${line##*/}" = "$want" ] && printf '%s\n' "$line"
+  local want="$1" line repos
+  repos=$(repoman_get_repos) || return 1
+  printf '%s\n' "$repos" | while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    # Must end the loop body with a 0-status command: a trailing non-matching
+    # line would otherwise leave `[ ... ] && printf` at exit 1, making the while
+    # (and the whole pipe) return 1 on a successful "no match for the last
+    # repo", which a `set -e` caller reads as a hard failure. The `if` guard
+    # keeps the body's final status 0 regardless of whether this line matched.
+    if [ "${line##*/}" = "$want" ]; then
+      printf '%s\n' "$line"
+    fi
   done
 }
 ```
