@@ -94,3 +94,20 @@ repoman_parse_requirements() {
     --argjson programs "$j_prog" \
     '{pat_scopes:$pat_scopes, labels_required:$labels_required, labels_applied:$labels_applied, programs:$programs}'
 }
+
+# This file is a sourced library, not a command. Executing it directly used to
+# exit 0 and print nothing: a caller that ran `repoman-requirements.sh <skill>`
+# (instead of sourcing it) captured an empty string, parsed it as [], and wrote
+# EMPTY requirements -- a silent capability-gate failure. Fail loud instead.
+# "${BASH_SOURCE[0]}" == "$0" only when this file is the executed script, not
+# when it is sourced. bash 3.2-safe.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  echo "ERROR: repoman-requirements.sh is a sourced library, not a command." >&2
+  echo "Source it, then call the function:" >&2
+  # Show the real resolved path to this library (BASH_SOURCE[0] is this file,
+  # since we only reach here when executed). A snippet with $0 or an
+  # unexpanded BASH_SOURCE would refer to the CALLER's script, not this one.
+  echo "    . \"${BASH_SOURCE[0]}\"" >&2
+  echo "    repoman_parse_requirements <skill-md-path>" >&2
+  exit 2
+fi
