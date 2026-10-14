@@ -104,7 +104,10 @@ repoman_parse_requirements() {
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   echo "ERROR: repoman-requirements.sh is a sourced library, not a command." >&2
   echo "Source it, then call the function:" >&2
-  echo "    . \"\$(dirname \"\$0\")/repoman-requirements.sh\"" >&2
+  # Show the real resolved path to this library (BASH_SOURCE[0] is this file,
+  # since we only reach here when executed). A snippet with $0 or an
+  # unexpanded BASH_SOURCE would refer to the CALLER's script, not this one.
+  echo "    . \"${BASH_SOURCE[0]}\"" >&2
   echo "    repoman_parse_requirements <skill-md-path>" >&2
   exit 2
 fi
