@@ -127,4 +127,58 @@ REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" REPOMAN_PROGRAMS_DIR="$PRO
   bash "$RUN" pr-review >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 0 ] || { echo "FAIL pr-review-no-output-gate: rc=$rc"; fail=1; }
 
+# ---------------------------------------------------------------------------
+# Task 5: capability gate + clone refresh (profile-gated)
+# ---------------------------------------------------------------------------
+
+# instrument stubs to record calls + honor RUN_STUB_*_RC
+cat > "$STUB_DIR/repoman-check.sh" <<STUB
+#!/usr/bin/env bash
+echo "ran-check" >> "$TEST_TMPDIR/calls"
+exit "\${RUN_STUB_CHECK_RC:-0}"
+STUB
+cat > "$STUB_DIR/repo-sync.sh" <<STUB
+#!/usr/bin/env bash
+echo "ran-sync" >> "$TEST_TMPDIR/calls"
+exit "\${RUN_STUB_SYNC_RC:-0}"
+STUB
+cat > "$STUB_DIR/link-health-scanner.sh" <<STUB
+#!/usr/bin/env bash
+echo "ran-link-health-scanner" >> "$TEST_TMPDIR/calls"
+exit 0
+STUB
+cat > "$STUB_DIR/automation-health-dashboard.sh" <<STUB
+#!/usr/bin/env bash
+echo "ran-automation-health-dashboard" >> "$TEST_TMPDIR/calls"
+exit 0
+STUB
+chmod +x "$STUB_DIR"/*.sh
+echo '{"enabled":true,"output_repo":{"mode":"same"}}' > "$PROGDIR/link-health.json"
+
+# scope gate fails -> abort non-zero, scanner NOT exec'd
+: > "$TEST_TMPDIR/calls"
+RUN_STUB_CHECK_RC=1 REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" \
+  REPOMAN_PROGRAMS_DIR="$PROGDIR" REPOMAN_INDEX_FILE="$TEST_TMPDIR/_index.json" \
+  bash "$RUN" link-health >/dev/null 2>&1; rc=$?
+[ "$rc" -ne 0 ] || { echo "FAIL scope-gate: expected non-zero"; fail=1; }
+grep -q "ran-link-health-scanner" "$TEST_TMPDIR/calls" && { echo "FAIL scope-gate: scanner ran anyway"; fail=1; }
+
+# happy path -> check runs, sync runs, scanner runs
+: > "$TEST_TMPDIR/calls"
+RUN_STUB_CHECK_RC=0 RUN_STUB_SYNC_RC=0 REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" \
+  REPOMAN_PROGRAMS_DIR="$PROGDIR" REPOMAN_INDEX_FILE="$TEST_TMPDIR/_index.json" \
+  bash "$RUN" link-health >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL happy-path rc=$rc"; fail=1; }
+grep -q "ran-check" "$TEST_TMPDIR/calls" || { echo "FAIL happy-path: check not run"; fail=1; }
+grep -q "ran-sync" "$TEST_TMPDIR/calls" || { echo "FAIL happy-path: sync not run"; fail=1; }
+grep -q "ran-link-health-scanner" "$TEST_TMPDIR/calls" || { echo "FAIL happy-path: scanner not run"; fail=1; }
+
+# automation-health (index-consumer) -> no check, no sync; dashboard exec'd
+: > "$TEST_TMPDIR/calls"
+REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" REPOMAN_PROGRAMS_DIR="$PROGDIR" \
+  REPOMAN_INDEX_FILE="$TEST_TMPDIR/_index.json" bash "$RUN" automation-health >/dev/null 2>&1
+grep -q "ran-check" "$TEST_TMPDIR/calls" && { echo "FAIL index-consumer ran capability check"; fail=1; }
+grep -q "ran-sync" "$TEST_TMPDIR/calls" && { echo "FAIL index-consumer ran clone refresh"; fail=1; }
+grep -q "ran-automation-health-dashboard" "$TEST_TMPDIR/calls" || { echo "FAIL index-consumer: dashboard not exec'd"; fail=1; }
+
 [ "$fail" -eq 0 ] && echo "PASS: repoman-run" || exit 1

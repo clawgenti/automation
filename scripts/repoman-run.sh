@@ -131,6 +131,27 @@ _require_output_repo() {
   return 0
 }
 
+# _run_capability_check <program> -> non-zero if the scope gate failed.
+# repoman-check.sh exits non-zero iff a PAT scope gap was found; label gaps are
+# warnings there and do not flip its exit. We surface its stderr and propagate.
+_run_capability_check() {
+  local program="$1"
+  if ! "$(_bin repoman-check.sh)" --program "$program"; then
+    echo "ERROR: $program: capability check failed (scope gate)." >&2
+    return 1
+  fi
+}
+
+# _run_clone_refresh -> non-zero only on TOTAL sync failure. repo-sync.sh exits
+# 1 iff ALL enrolled repos failed (a partial failure is logged there and exits
+# 0); total failure is fatal because there is nothing cloned to scan.
+_run_clone_refresh() {
+  if ! "$(_bin repo-sync.sh)"; then
+    echo "ERROR: clone refresh failed for all repos; cannot scan." >&2
+    return 1
+  fi
+}
+
 main() {
   local program="" dry_run=false
   local -a targets=()
@@ -152,6 +173,7 @@ main() {
 
   local profile; profile=$(_row_field "$row" 2)
 
+  local needs_clone; needs_clone=$(_row_field "$row" 3)
   local posts_output; posts_output=$(_row_field "$row" 4)
   local scanner_script; scanner_script=$(_row_field "$row" 6)
 
@@ -185,7 +207,16 @@ main() {
     export REPOMAN_REPOS_FILE="$subset_file"
   fi
 
-  # (capability gate + clone refresh wired in Task 5; index write in Task 6.)
+  # Execution preconditions. The index-consumer profile scans nothing, so it
+  # skips the capability gate and clone refresh entirely.
+  if [ "$profile" != "index-consumer" ]; then
+    _run_capability_check "$program" || return 1
+    if [ "$needs_clone" = "yes" ]; then
+      _run_clone_refresh || return 1
+    fi
+  fi
+
+  # (index write wired in Task 6.)
 
   # Exec the program.
   if ! "$(_bin "$scanner_script")"; then
