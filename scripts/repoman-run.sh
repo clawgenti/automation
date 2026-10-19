@@ -84,16 +84,16 @@ RUN_TMPDIR=""
 _cleanup_run_tmp() { [ -n "$RUN_TMPDIR" ] && rm -rf "$RUN_TMPDIR"; }
 trap _cleanup_run_tmp EXIT
 
-# _project_subset <newline-delimited owner/name> -> path to a throwaway
-# repos.json holding exactly that subset. Lives in $TMPDIR (NOT under
-# ~/.repoman/); written directly as a projection, which is allowed because it
-# is outside the guarded dir (HARD INVARIANT guards only ~/.repoman/ state).
+# _project_subset <dir> <newline-delimited owner/name> -> path to a throwaway
+# repos.json (inside <dir>) holding exactly that subset. Lives in $TMPDIR (NOT
+# under ~/.repoman/); written directly as a projection, which is allowed because
+# it is outside the guarded dir (HARD INVARIANT guards only ~/.repoman/ state).
+# The CALLER owns the dir (and its cleanup) so the EXIT trap can see it — a dir
+# created in this command-substitution subshell would not be visible to the
+# parent's trap, leaking the temp dir.
 _project_subset() {
-  local set_in="$1"
-  if ! RUN_TMPDIR=$(mktemp -d); then
-    echo "ERROR: mktemp -d failed; cannot project repo subset" >&2; return 1
-  fi
-  local out="$RUN_TMPDIR/repos.json"
+  local dir="$1" set_in="$2"
+  local out="$dir/repos.json"
   if ! printf '%s\n' "$set_in" \
       | jq -R 'select(length>0) | {owner: (split("/")[0]), name: (split("/")[1])}' \
       | jq -s '.' > "$out"; then
@@ -210,8 +210,14 @@ main() {
   # Narrow to a subset via a throwaway repos file when targets were named.
   # index-consumer programs scan nothing, so they never project a subset.
   if [ "$profile" != "index-consumer" ] && [ -n "$resolved_set" ]; then
+    # Create the temp dir in the PARENT so the EXIT trap (which reads the
+    # global RUN_TMPDIR) can clean it; a dir made inside _project_subset's
+    # command-substitution subshell would be invisible to the trap and leak.
+    if ! RUN_TMPDIR=$(mktemp -d); then
+      echo "ERROR: mktemp -d failed; cannot project repo subset" >&2; return 1
+    fi
     local subset_file
-    if ! subset_file=$(_project_subset "$resolved_set"); then
+    if ! subset_file=$(_project_subset "$RUN_TMPDIR" "$resolved_set"); then
       return 1
     fi
     export REPOMAN_REPOS_FILE="$subset_file"

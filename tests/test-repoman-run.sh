@@ -87,6 +87,15 @@ rm -f "$SEEN"; runlh link-health eventing-lab >/dev/null 2>&1
 names=$(jq -r '.[].name' "$SEEN" 2>/dev/null | sort | tr '\n' ',')
 [ "$names" = "eventing-lab," ] || { echo "FAIL subset-projection: scanner saw [$names] (want eventing-lab,)"; fail=1; }
 
+# named subset -> the EXIT trap cleans the temp dir (no leak). Count mktemp
+# dirs under $TMPDIR before/after; a subset run must not increase the count.
+tmproot="${TMPDIR:-/tmp}"
+before_n=$(find "$tmproot" -maxdepth 1 -type d -name 'tmp.*' 2>/dev/null | wc -l | tr -d ' ')
+runlh link-health eventing-lab >/dev/null 2>&1
+after_n=$(find "$tmproot" -maxdepth 1 -type d -name 'tmp.*' 2>/dev/null | wc -l | tr -d ' ')
+[ "$after_n" -le "$before_n" ] \
+  || { echo "FAIL subset-leak: temp dir not cleaned (before=$before_n after=$after_n)"; fail=1; }
+
 # no targets -> scanner sees the FULL enrolled set (both repos)
 rm -f "$SEEN"
 REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" REPOMAN_PROGRAMS_DIR="$PROGDIR" \
