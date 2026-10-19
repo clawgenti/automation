@@ -50,6 +50,33 @@ _known_programs() {
 # _row_field <row> <n> -> the n-th tab-separated field (1-indexed).
 _row_field() { printf '%s\n' "$1" | awk -F'\t' -v n="$2" '{print $n}'; }
 
+# _resolve_targets <target...> -> newline-delimited owner/name set, or non-zero
+# on an unknown/unenrolled target. Trusts the skill's reconciliation; only
+# VALIDATES enrollment (defensive). Bare name -> repoman_match_name. With no
+# targets, emits nothing (caller treats as the whole enrolled set).
+_resolve_targets() {
+  [ "$#" -gt 0 ] || return 0
+  local t resolved
+  for t in "$@"; do
+    case "$t" in
+      */*)
+        if is_enrolled "$t"; then
+          printf '%s\n' "$t"
+        else
+          echo "ERROR: target '$t' is not enrolled" >&2; return 1
+        fi ;;
+      *)
+        if ! resolved=$(repoman_match_name "$t"); then
+          echo "ERROR: failed resolving target '$t'" >&2; return 1
+        fi
+        if [ -z "$resolved" ]; then
+          echo "ERROR: target '$t' matches no enrolled repo" >&2; return 1
+        fi
+        printf '%s\n' "$resolved" ;;
+    esac
+  done
+}
+
 main() {
   local program="" dry_run=false
   local -a targets=()
@@ -71,8 +98,18 @@ main() {
 
   local profile; profile=$(_row_field "$row" 2)
 
-  # Remaining pipeline (resolve/project/gate/sync/exec/index) wired in later tasks.
-  "$dry_run" && echo "[dry-run] would run $program (profile=$profile) with ${#targets[@]} target(s)"
+  # Validate / resolve any named targets against the enrolled set (defensive;
+  # the skill has already reconciled them). Empty -> whole enrolled set.
+  local resolved_set
+  if ! resolved_set=$(_resolve_targets "${targets[@]+"${targets[@]}"}"); then
+    return 1
+  fi
+
+  # Remaining pipeline (project/gate/sync/exec/index) wired in later tasks.
+  if "$dry_run"; then
+    echo "[dry-run] would run $program (profile=$profile)"
+    [ -n "$resolved_set" ] && printf 'targets:\n%s\n' "$resolved_set"
+  fi
   return 0
 }
 

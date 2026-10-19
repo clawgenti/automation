@@ -31,4 +31,28 @@ out=$(bash "$RUN" --help 2>&1); rc=$?
 [ "$rc" -eq 0 ] || { echo "FAIL --help rc=$rc"; fail=1; }
 case "$out" in *"Usage:"*) ;; *) echo "FAIL --help no usage"; fail=1 ;; esac
 
-[ "$fail" -eq 0 ] && echo "PASS: repoman-run skeleton" || exit 1
+# ---------------------------------------------------------------------------
+# Task 2: target reconciliation guard (trust-but-validate the enrolled subset)
+# ---------------------------------------------------------------------------
+
+# fixture: two enrolled repos
+cat > "$TEST_TMPDIR/repos.json" <<'JSON'
+[{"owner":"rossoctl","name":"eventing-lab"},{"owner":"rossoctl","name":"context-service"}]
+JSON
+FIX="$TEST_TMPDIR/repos.json"
+
+# bare name, one owner -> resolves to owner/name (visible in --dry-run output)
+got=$(REPOMAN_REPOS_FILE="$FIX" bash "$RUN" link-health eventing-lab --dry-run 2>&1); rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL resolve-bare rc=$rc: $got"; fail=1; }
+case "$got" in *"rossoctl/eventing-lab"*) ;; *) echo "FAIL resolve-bare: [$got]"; fail=1 ;; esac
+
+# owner/name already enrolled -> passes
+got=$(REPOMAN_REPOS_FILE="$FIX" bash "$RUN" link-health rossoctl/context-service --dry-run 2>&1); rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL resolve-slug rc=$rc: $got"; fail=1; }
+
+# not-enrolled target -> fail loud naming it
+err=$(REPOMAN_REPOS_FILE="$FIX" bash "$RUN" link-health not-a-repo --dry-run 2>&1 >/dev/null); rc=$?
+[ "$rc" -ne 0 ] || { echo "FAIL unenrolled: expected non-zero"; fail=1; }
+case "$err" in *"not-a-repo"*) ;; *) echo "FAIL unenrolled: should name target, got [$err]"; fail=1 ;; esac
+
+[ "$fail" -eq 0 ] && echo "PASS: repoman-run" || exit 1
