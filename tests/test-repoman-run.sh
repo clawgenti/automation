@@ -209,4 +209,28 @@ REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" REPOMAN_PROGRAMS_DIR="$PRO
   bash "$RUN" pr-review >/dev/null 2>&1
 grep -q "^index " "$TEST_TMPDIR/calls" && { echo "FAIL index-write: pr-review should not be indexed"; fail=1; }
 
+# ---------------------------------------------------------------------------
+# Task 7: total clone-sync failure is fatal (partial is handled inside repo-sync)
+# ---------------------------------------------------------------------------
+
+echo '{"enabled":true,"output_repo":{"mode":"same"}}' > "$PROGDIR/link-health.json"
+
+# total sync failure (repo-sync exits 1) -> abort non-zero, scanner NOT exec'd
+: > "$TEST_TMPDIR/calls"
+RUN_STUB_CHECK_RC=0 RUN_STUB_SYNC_RC=1 REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" \
+  REPOMAN_PROGRAMS_DIR="$PROGDIR" REPOMAN_INDEX_FILE="$TEST_TMPDIR/_index.json" \
+  bash "$RUN" link-health >/dev/null 2>&1; rc=$?
+[ "$rc" -ne 0 ] || { echo "FAIL total-sync: expected abort"; fail=1; }
+grep -q "ran-link-health-scanner" "$TEST_TMPDIR/calls" \
+  && { echo "FAIL total-sync: scanner ran after total sync failure"; fail=1; }
+
+# partial sync (repo-sync exits 0, handled internally) -> run proceeds to exec
+: > "$TEST_TMPDIR/calls"
+RUN_STUB_CHECK_RC=0 RUN_STUB_SYNC_RC=0 REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" \
+  REPOMAN_PROGRAMS_DIR="$PROGDIR" REPOMAN_INDEX_FILE="$TEST_TMPDIR/_index.json" \
+  bash "$RUN" link-health >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL partial-sync: expected success rc=$rc"; fail=1; }
+grep -q "ran-link-health-scanner" "$TEST_TMPDIR/calls" \
+  || { echo "FAIL partial-sync: scanner should have run"; fail=1; }
+
 [ "$fail" -eq 0 ] && echo "PASS: repoman-run" || exit 1
