@@ -105,6 +105,32 @@ _project_subset() {
 # inject stubs there).
 _bin() { echo "${REPOMAN_RUN_BIN:-$SCRIPT_DIR}/$1"; }
 
+# _require_output_repo <program> -> rc 0 if output_repo is present and
+# well-formed in programs/<name>.json (mode:same, or mode:central with a
+# non-empty owner/name repo); non-zero + fail-loud otherwise. Never prompts.
+_require_output_repo() {
+  local program="$1" progdir f mode repo
+  progdir="${REPOMAN_PROGRAMS_DIR:-$HOME/.repoman/programs}"
+  f="$progdir/$program.json"
+  if [ ! -f "$f" ]; then
+    echo "ERROR: $program: output destination not set (no $f). Run /repoman or repoman-setup.sh set-output." >&2
+    return 1
+  fi
+  mode=$(jq -r '.output_repo.mode // empty' "$f" 2>/dev/null)
+  if [ -z "$mode" ]; then
+    echo "ERROR: $program: output destination not set. Run /repoman or repoman-setup.sh set-output." >&2
+    return 1
+  fi
+  if [ "$mode" = "central" ]; then
+    repo=$(jq -r '.output_repo.repo // empty' "$f" 2>/dev/null)
+    case "$repo" in
+      */*) : ;;
+      *) echo "ERROR: $program: output_repo mode=central but 'repo' missing/malformed in $f" >&2; return 1 ;;
+    esac
+  fi
+  return 0
+}
+
 main() {
   local program="" dry_run=false
   local -a targets=()
@@ -126,6 +152,7 @@ main() {
 
   local profile; profile=$(_row_field "$row" 2)
 
+  local posts_output; posts_output=$(_row_field "$row" 4)
   local scanner_script; scanner_script=$(_row_field "$row" 6)
 
   # Validate / resolve any named targets against the enrolled set (defensive;
@@ -133,6 +160,19 @@ main() {
   local resolved_set
   if ! resolved_set=$(_resolve_targets "${targets[@]+"${targets[@]}"}"); then
     return 1
+  fi
+
+  # --dry-run previews the resolved set only; it skips every execution
+  # precondition (output gate, capability check, clone refresh) and the exec.
+  if "$dry_run"; then
+    echo "[dry-run] would run $program (profile=$profile)"
+    [ -n "$resolved_set" ] && printf 'targets:\n%s\n' "$resolved_set"
+    return 0
+  fi
+
+  # Output routing must be set beforehand for programs that post results.
+  if [ "$posts_output" = "yes" ]; then
+    _require_output_repo "$program" || return 1
   fi
 
   # Narrow to a subset via a throwaway repos file when targets were named.
@@ -145,13 +185,7 @@ main() {
     export REPOMAN_REPOS_FILE="$subset_file"
   fi
 
-  # (gate + clone refresh wired in Task 5; index write in Task 6.)
-
-  if "$dry_run"; then
-    echo "[dry-run] would run $program (profile=$profile)"
-    [ -n "$resolved_set" ] && printf 'targets:\n%s\n' "$resolved_set"
-    return 0
-  fi
+  # (capability gate + clone refresh wired in Task 5; index write in Task 6.)
 
   # Exec the program.
   if ! "$(_bin "$scanner_script")"; then

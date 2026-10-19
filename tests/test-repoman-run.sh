@@ -92,4 +92,39 @@ REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" REPOMAN_PROGRAMS_DIR="$PRO
 names=$(jq -r '.[].name' "$SEEN" 2>/dev/null | sort | tr '\n' ',')
 [ "$names" = "context-service,eventing-lab," ] || { echo "FAIL no-targets: scanner saw [$names] (want full set)"; fail=1; }
 
+# ---------------------------------------------------------------------------
+# Task 4: output-routing requirement for posts_output programs
+# ---------------------------------------------------------------------------
+
+# missing output_repo -> fail loud "output destination not set"
+echo '{"enabled":true}' > "$PROGDIR/link-health.json"
+err=$(REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" REPOMAN_PROGRAMS_DIR="$PROGDIR" \
+  bash "$RUN" link-health 2>&1 >/dev/null); rc=$?
+[ "$rc" -ne 0 ] || { echo "FAIL output-unset: expected non-zero"; fail=1; }
+case "$err" in *"output destination not set"*) ;; *) echo "FAIL output-unset msg: [$err]"; fail=1 ;; esac
+
+# mode=central with no repo -> fail loud (malformed)
+echo '{"enabled":true,"output_repo":{"mode":"central"}}' > "$PROGDIR/link-health.json"
+err=$(REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" REPOMAN_PROGRAMS_DIR="$PROGDIR" \
+  bash "$RUN" link-health 2>&1 >/dev/null); rc=$?
+[ "$rc" -ne 0 ] || { echo "FAIL output-central-norepo: expected non-zero"; fail=1; }
+case "$err" in *"central"*) ;; *) echo "FAIL output-central-norepo msg: [$err]"; fail=1 ;; esac
+
+# mode=same -> ok (program runs)
+echo '{"enabled":true,"output_repo":{"mode":"same"}}' > "$PROGDIR/link-health.json"
+REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" REPOMAN_PROGRAMS_DIR="$PROGDIR" \
+  REPOMAN_INDEX_FILE="$TEST_TMPDIR/_index.json" bash "$RUN" link-health >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL output-same: rc=$rc"; fail=1; }
+
+# pr-review (posts_output=no) -> no output_repo required, runs without one
+cat > "$STUB_DIR/pr-review-scanner.sh" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$STUB_DIR/pr-review-scanner.sh"
+rm -f "$PROGDIR/pr-review.json"
+REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" REPOMAN_PROGRAMS_DIR="$PROGDIR" \
+  bash "$RUN" pr-review >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL pr-review-no-output-gate: rc=$rc"; fail=1; }
+
 [ "$fail" -eq 0 ] && echo "PASS: repoman-run" || exit 1
