@@ -31,7 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # user who introduces a new program must add its identifier here until the
 # program registry (_index.json, tracked in #76) replaces it with a
 # discovered list.
-KNOWN_PROGRAMS="link-health dep-bump pr-review automation-health repo-sync"
+KNOWN_PROGRAMS="link-health dep-bump pr-review automation-health repo-sync weekly-report"
 
 usage() {
   cat <<'EOF'

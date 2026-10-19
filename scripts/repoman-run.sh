@@ -6,7 +6,7 @@
 # requires, execs the program, and writes its _index.json entry. Non-interactive
 # (output routing must be set beforehand via repoman-setup.sh set-output).
 #
-# Spec: docs/specs/2026-10-18-repoman-run-path-design.md
+# The run-path half of the RepoMan v0.1.0 completion work (issue #107, epic #72).
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/program-lib.sh
@@ -57,7 +57,7 @@ _row_field() { printf '%s\n' "$1" | awk -F'\t' -v n="$2" '{print $n}'; }
 # targets, emits nothing (caller treats as the whole enrolled set).
 _resolve_targets() {
   [ "$#" -gt 0 ] || return 0
-  local t resolved
+  local t resolved nmatch
   for t in "$@"; do
     case "$t" in
       */*)
@@ -73,9 +73,20 @@ _resolve_targets() {
         if [ -z "$resolved" ]; then
           echo "ERROR: target '$t' matches no enrolled repo" >&2; return 1
         fi
+        # repoman_match_name emits one line per matching owner/name. A bare name
+        # enrolled under >=2 owners is AMBIGUOUS: fail loud with the candidates
+        # rather than silently broaden the run to all of them. (This CLI accepts
+        # bare names directly, so it must not guess which owner was meant.)
+        nmatch=$(printf '%s\n' "$resolved" | grep -c .)
+        if [ "$nmatch" -gt 1 ]; then
+          echo "ERROR: target '$t' is ambiguous — enrolled under multiple owners:" >&2
+          printf '  %s\n' "$resolved" >&2
+          echo "Re-run with an explicit owner/name." >&2
+          return 1
+        fi
         printf '%s\n' "$resolved" ;;
     esac
-  done
+  done | awk 'NF && !seen[$0]++'   # dedup, preserve first-seen order
 }
 
 # Run-scoped temp dir for subset projection; cleaned on any exit (success,

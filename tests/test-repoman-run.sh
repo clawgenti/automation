@@ -78,6 +78,27 @@ err=$(runlh link-health not-a-repo 2>&1 >/dev/null); rc=$?
 [ "$rc" -ne 0 ] || { echo "FAIL unenrolled: expected non-zero"; fail=1; }
 case "$err" in *"not-a-repo"*) ;; *) echo "FAIL unenrolled: should name target, got [$err]"; fail=1 ;; esac
 
+# Ambiguous bare name (enrolled under TWO owners) -> fail loud, do NOT silently
+# expand to both. Uses a fixture where "shared" exists under two owners.
+AMBIG="$TEST_TMPDIR/repos-ambig.json"
+cat > "$AMBIG" <<'JSON'
+[{"owner":"rossoctl","name":"shared"},{"owner":"alice","name":"shared"}]
+JSON
+err=$(REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$AMBIG" REPOMAN_PROGRAMS_DIR="$PROGDIR" \
+  REPOMAN_INDEX_FILE="$TEST_TMPDIR/_index.json" bash "$RUN" link-health shared 2>&1 >/dev/null); rc=$?
+[ "$rc" -ne 0 ] || { echo "FAIL ambiguous: expected non-zero on 2-owner bare name"; fail=1; }
+case "$err" in
+  *"ambiguous"*|*"rossoctl/shared"*) ;;
+  *) echo "FAIL ambiguous: should name the candidates, got [$err]"; fail=1 ;;
+esac
+
+# Duplicate targets -> deduped (scanner sees the repo once, run succeeds)
+rm -f "$SEEN"
+runlh link-health eventing-lab eventing-lab >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL dedup rc=$rc"; fail=1; }
+dupn=$(jq -r '[.[].name] | length' "$SEEN" 2>/dev/null)
+[ "$dupn" = "1" ] || { echo "FAIL dedup: scanner saw $dupn entries (want 1)"; fail=1; }
+
 # ---------------------------------------------------------------------------
 # Task 3: subset projection to env-scoped temp repos.json
 # ---------------------------------------------------------------------------

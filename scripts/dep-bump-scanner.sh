@@ -590,8 +590,7 @@ echo "Appended to $REPORTS_DIR/history.json"
 # Note: _index.json registration is performed by the run-path orchestrator
 # (scripts/repoman-run.sh), the sole index writer — not here. Running this
 # scanner directly no longer updates the registry; `repoman run dep-bump` is
-# the blessed path for an indexed run. See
-# docs/specs/2026-10-18-repoman-run-path-design.md (Index-write contract).
+# the blessed path for an indexed run. (Run path: issue #107, epic #72.)
 
 # --- Escalation check ---
 if [ "$NEW_STALE" -gt "$ESCALATION_THRESHOLD" ]; then
