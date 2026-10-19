@@ -152,6 +152,19 @@ _run_clone_refresh() {
   fi
 }
 
+# _write_index <program> <display_name> <report_path> -> registers the program
+# in _index.json via repoman-index.sh. The orchestrator is the SOLE index
+# writer (scanners no longer self-register). A failed index write is logged, not
+# fatal: the program's reports are the primary product.
+_write_index() {
+  local program="$1" display="$2" report_path="$3"
+  local index_file="${REPOMAN_INDEX_FILE:-$(dirname "$report_path")/_index.json}"
+  if ! "$(_bin repoman-index.sh)" --index "$index_file" \
+        --program "$program" --display-name "$display" --report-path "$report_path"; then
+    echo "WARNING: failed to update program registry at $index_file (program output was still produced)" >&2
+  fi
+}
+
 main() {
   local program="" dry_run=false
   local -a targets=()
@@ -175,7 +188,10 @@ main() {
 
   local needs_clone; needs_clone=$(_row_field "$row" 3)
   local posts_output; posts_output=$(_row_field "$row" 4)
+  local writes_index; writes_index=$(_row_field "$row" 5)
   local scanner_script; scanner_script=$(_row_field "$row" 6)
+  local display_name; display_name=$(_row_field "$row" 7)
+  local report_path; report_path=$(_row_field "$row" 8)
 
   # Validate / resolve any named targets against the enrolled set (defensive;
   # the skill has already reconciled them). Empty -> whole enrolled set.
@@ -216,11 +232,14 @@ main() {
     fi
   fi
 
-  # (index write wired in Task 6.)
-
   # Exec the program.
   if ! "$(_bin "$scanner_script")"; then
     echo "ERROR: $program exec failed" >&2; return 1
+  fi
+
+  # Register in the index (sole writer). Only for programs with the shape.
+  if [ "$writes_index" = "yes" ]; then
+    _write_index "$program" "$display_name" "$report_path"
   fi
   return 0
 }

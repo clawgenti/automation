@@ -587,19 +587,11 @@ HISTORY_ROW=$(jq -nc \
 append_history_row "$REPORTS_DIR" "$HISTORY_ROW" "$MAX_HISTORY_ROWS"
 echo "Appended to $REPORTS_DIR/history.json"
 
-# --- Register in the program registry (Phase 5) ---
-# The index lives beside the program report dirs (parent of REPORTS_DIR);
-# REPOMAN_INDEX_FILE overrides for tests/dogfood. A failed index write must
-# NOT fail an otherwise successful scan (the reports are the primary
-# product) -- but it is logged, not swallowed silently.
-index_file="${REPOMAN_INDEX_FILE:-$(dirname "$REPORTS_DIR")/_index.json}"
-if ! "$SCRIPT_DIR/repoman-index.sh" \
-      --index "$index_file" \
-      --program dep-bump \
-      --display-name "Dependency Bumps" \
-      --report-path "$REPORTS_DIR"; then
-  echo "WARNING: failed to update program registry at $index_file (scan reports were still written)" >&2
-fi
+# Note: _index.json registration is performed by the run-path orchestrator
+# (scripts/repoman-run.sh), the sole index writer — not here. Running this
+# scanner directly no longer updates the registry; `repoman run dep-bump` is
+# the blessed path for an indexed run. See
+# docs/specs/2026-10-18-repoman-run-path-design.md (Index-write contract).
 
 # --- Escalation check ---
 if [ "$NEW_STALE" -gt "$ESCALATION_THRESHOLD" ]; then

@@ -364,19 +364,11 @@ HIST_EOF
 append_history_row "$REPORTS_DIR" "$HISTORY_ROW" "$MAX_HISTORY_ROWS"
 echo "Appended to history.json"
 
-# --- Register in the program registry (Phase 5) ---
-# The index lives beside the program report dirs (parent of REPORTS_DIR);
-# REPOMAN_INDEX_FILE overrides for tests/dogfood. A failed index write must
-# NOT fail an otherwise successful scan (the reports are the primary
-# product) -- but it is logged, not swallowed silently.
-index_file="${REPOMAN_INDEX_FILE:-$(dirname "$REPORTS_DIR")/_index.json}"
-if ! "$SCRIPT_DIR/repoman-index.sh" \
-      --index "$index_file" \
-      --program link-health \
-      --display-name "Link Health" \
-      --report-path "$REPORTS_DIR"; then
-  echo "WARNING: failed to update program registry at $index_file (scan reports were still written)" >&2
-fi
+# Note: _index.json registration is performed by the run-path orchestrator
+# (scripts/repoman-run.sh), the sole index writer — not here. Running this
+# scanner directly no longer updates the registry; `repoman run link-health`
+# is the blessed path for an indexed run. See
+# docs/specs/2026-10-18-repoman-run-path-design.md (Index-write contract).
 
 # --- Update docs/link-health.md ---
 # Build trend table from last 10 history entries (deduplicate same-day rows)

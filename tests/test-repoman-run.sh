@@ -181,4 +181,32 @@ grep -q "ran-check" "$TEST_TMPDIR/calls" && { echo "FAIL index-consumer ran capa
 grep -q "ran-sync" "$TEST_TMPDIR/calls" && { echo "FAIL index-consumer ran clone refresh"; fail=1; }
 grep -q "ran-automation-health-dashboard" "$TEST_TMPDIR/calls" || { echo "FAIL index-consumer: dashboard not exec'd"; fail=1; }
 
+# ---------------------------------------------------------------------------
+# Task 6: orchestrator owns the index write (single writer)
+# ---------------------------------------------------------------------------
+
+# index stub records its args. NOTE: \$* and \$TEST_TMPDIR escaped so they are
+# written literally and expand when the STUB runs, not at heredoc creation.
+cat > "$STUB_DIR/repoman-index.sh" <<STUB
+#!/usr/bin/env bash
+echo "index \$*" >> "$TEST_TMPDIR/calls"
+exit 0
+STUB
+chmod +x "$STUB_DIR/repoman-index.sh"
+echo '{"enabled":true,"output_repo":{"mode":"same"}}' > "$PROGDIR/link-health.json"
+
+# link-health (writes_index=yes) -> orchestrator invokes index with program+display-name
+: > "$TEST_TMPDIR/calls"
+RUN_STUB_CHECK_RC=0 RUN_STUB_SYNC_RC=0 REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" \
+  REPOMAN_PROGRAMS_DIR="$PROGDIR" REPOMAN_INDEX_FILE="$TEST_TMPDIR/_index.json" \
+  bash "$RUN" link-health >/dev/null 2>&1
+grep -q "index .*--program link-health.*--display-name Link Health" "$TEST_TMPDIR/calls" \
+  || { echo "FAIL index-write: orchestrator did not write link-health index ($(grep '^index' "$TEST_TMPDIR/calls"))"; fail=1; }
+
+# pr-review (writes_index=no) -> index NOT invoked
+: > "$TEST_TMPDIR/calls"
+REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" REPOMAN_PROGRAMS_DIR="$PROGDIR" \
+  bash "$RUN" pr-review >/dev/null 2>&1
+grep -q "^index " "$TEST_TMPDIR/calls" && { echo "FAIL index-write: pr-review should not be indexed"; fail=1; }
+
 [ "$fail" -eq 0 ] && echo "PASS: repoman-run" || exit 1
