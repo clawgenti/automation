@@ -77,6 +77,34 @@ _resolve_targets() {
   done
 }
 
+# Run-scoped temp dir for subset projection; cleaned on any exit (success,
+# error, or signal). Only a hard kill -9 leaks, and $TMPDIR is OS-reclaimed.
+RUN_TMPDIR=""
+_cleanup_run_tmp() { [ -n "$RUN_TMPDIR" ] && rm -rf "$RUN_TMPDIR"; }
+trap _cleanup_run_tmp EXIT
+
+# _project_subset <newline-delimited owner/name> -> path to a throwaway
+# repos.json holding exactly that subset. Lives in $TMPDIR (NOT under
+# ~/.repoman/); written directly as a projection, which is allowed because it
+# is outside the guarded dir (HARD INVARIANT guards only ~/.repoman/ state).
+_project_subset() {
+  local set_in="$1"
+  if ! RUN_TMPDIR=$(mktemp -d); then
+    echo "ERROR: mktemp -d failed; cannot project repo subset" >&2; return 1
+  fi
+  local out="$RUN_TMPDIR/repos.json"
+  if ! printf '%s\n' "$set_in" \
+      | jq -R 'select(length>0) | {owner: (split("/")[0]), name: (split("/")[1])}' \
+      | jq -s '.' > "$out"; then
+    echo "ERROR: failed writing subset repos file" >&2; return 1
+  fi
+  printf '%s\n' "$out"
+}
+
+# _bin <name> -> path to a sibling script, overridable by REPOMAN_RUN_BIN (tests
+# inject stubs there).
+_bin() { echo "${REPOMAN_RUN_BIN:-$SCRIPT_DIR}/$1"; }
+
 main() {
   local program="" dry_run=false
   local -a targets=()
@@ -98,6 +126,8 @@ main() {
 
   local profile; profile=$(_row_field "$row" 2)
 
+  local scanner_script; scanner_script=$(_row_field "$row" 6)
+
   # Validate / resolve any named targets against the enrolled set (defensive;
   # the skill has already reconciled them). Empty -> whole enrolled set.
   local resolved_set
@@ -105,10 +135,27 @@ main() {
     return 1
   fi
 
-  # Remaining pipeline (project/gate/sync/exec/index) wired in later tasks.
+  # Narrow to a subset via a throwaway repos file when targets were named.
+  # index-consumer programs scan nothing, so they never project a subset.
+  if [ "$profile" != "index-consumer" ] && [ -n "$resolved_set" ]; then
+    local subset_file
+    if ! subset_file=$(_project_subset "$resolved_set"); then
+      return 1
+    fi
+    export REPOMAN_REPOS_FILE="$subset_file"
+  fi
+
+  # (gate + clone refresh wired in Task 5; index write in Task 6.)
+
   if "$dry_run"; then
     echo "[dry-run] would run $program (profile=$profile)"
     [ -n "$resolved_set" ] && printf 'targets:\n%s\n' "$resolved_set"
+    return 0
+  fi
+
+  # Exec the program.
+  if ! "$(_bin "$scanner_script")"; then
+    echo "ERROR: $program exec failed" >&2; return 1
   fi
   return 0
 }

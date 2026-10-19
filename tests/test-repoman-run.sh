@@ -55,4 +55,41 @@ err=$(REPOMAN_REPOS_FILE="$FIX" bash "$RUN" link-health not-a-repo --dry-run 2>&
 [ "$rc" -ne 0 ] || { echo "FAIL unenrolled: expected non-zero"; fail=1; }
 case "$err" in *"not-a-repo"*) ;; *) echo "FAIL unenrolled: should name target, got [$err]"; fail=1 ;; esac
 
+# ---------------------------------------------------------------------------
+# Task 3: subset projection to env-scoped temp repos.json
+# Uses the REPOMAN_RUN_BIN seam to stub the scanner so we can inspect the
+# REPOMAN_REPOS_FILE it was handed.
+# ---------------------------------------------------------------------------
+
+STUB_DIR="$TEST_TMPDIR/bin"; mkdir -p "$STUB_DIR"
+SEEN="$TEST_TMPDIR/seen_repos.json"
+# scanner stub: copies whatever repos file it was given so the test can inspect it
+cat > "$STUB_DIR/link-health-scanner.sh" <<STUB
+#!/usr/bin/env bash
+cp "\${REPOMAN_REPOS_FILE:-$FIX}" "$SEEN" 2>/dev/null || true
+exit 0
+STUB
+chmod +x "$STUB_DIR/link-health-scanner.sh"
+# minimal stubs so the (later-wired) gate/sync/index steps don't block this case
+for s in repoman-check.sh repo-sync.sh repoman-index.sh; do
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$STUB_DIR/$s"; chmod +x "$STUB_DIR/$s"
+done
+# programs dir with output set, so posts_output gate (wired later) passes
+PROGDIR="$TEST_TMPDIR/programs"; mkdir -p "$PROGDIR"
+echo '{"enabled":true,"output_repo":{"mode":"same"}}' > "$PROGDIR/link-health.json"
+
+# named subset -> scanner sees ONLY that repo
+rm -f "$SEEN"
+REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" REPOMAN_PROGRAMS_DIR="$PROGDIR" \
+  REPOMAN_INDEX_FILE="$TEST_TMPDIR/_index.json" bash "$RUN" link-health eventing-lab >/dev/null 2>&1
+names=$(jq -r '.[].name' "$SEEN" 2>/dev/null | sort | tr '\n' ',')
+[ "$names" = "eventing-lab," ] || { echo "FAIL subset-projection: scanner saw [$names] (want eventing-lab,)"; fail=1; }
+
+# no targets -> scanner sees the FULL enrolled set (both repos)
+rm -f "$SEEN"
+REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" REPOMAN_PROGRAMS_DIR="$PROGDIR" \
+  REPOMAN_INDEX_FILE="$TEST_TMPDIR/_index.json" bash "$RUN" link-health >/dev/null 2>&1
+names=$(jq -r '.[].name' "$SEEN" 2>/dev/null | sort | tr '\n' ',')
+[ "$names" = "context-service,eventing-lab," ] || { echo "FAIL no-targets: scanner saw [$names] (want full set)"; fail=1; }
+
 [ "$fail" -eq 0 ] && echo "PASS: repoman-run" || exit 1
