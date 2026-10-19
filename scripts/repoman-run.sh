@@ -24,14 +24,15 @@ EOF
 }
 
 # Per-program step table. One row per program. Fields (tab-separated):
-#   program  profile  needs_clone_refresh  posts_output  writes_index  scanner_script  display_name  report_path
+#   1 program  2 profile  3 needs_clone_refresh  4 posts_output  5 writes_index
+#   6 scanner_script  7 display_name  8 report_path  9 supports_dry_run
 # Must stay consistent with KNOWN_PROGRAMS in repoman-setup.sh (unify = #76).
 _PROGRAM_TABLE="\
-link-health	scanner	yes	yes	yes	link-health-scanner.sh	Link Health	$HOME/reports/link-health
-dep-bump	scanner	yes	yes	yes	dep-bump-scanner.sh	Dependency Bumps	$HOME/reports/dep-bump
-pr-review	scanner	no	no	no	pr-review-scanner.sh	PR Review
-weekly-report	scanner	no	no	no	weekly-report.sh	Weekly Report
-automation-health	index-consumer	no	no	no	automation-health-dashboard.sh	Automation Health	"
+link-health	scanner	yes	yes	yes	link-health-scanner.sh	Link Health	$HOME/reports/link-health	yes
+dep-bump	scanner	yes	yes	yes	dep-bump-scanner.sh	Dependency Bumps	$HOME/reports/dep-bump	yes
+pr-review	scanner	no	no	no	pr-review-scanner.sh	PR Review		yes
+weekly-report	scanner	no	no	no	weekly-report.sh	Weekly Report		no
+automation-health	index-consumer	no	no	no	automation-health-dashboard.sh	Automation Health		yes"
 
 # _program_row <program> -> echoes the tab-separated row, or returns 1 if unknown.
 # NOTE: the `while` runs in a subshell (right side of a pipe), so a `return`
@@ -136,7 +137,7 @@ _require_output_repo() {
 # warnings there and do not flip its exit. We surface its stderr and propagate.
 _run_capability_check() {
   local program="$1"
-  if ! "$(_bin repoman-check.sh)" --program "$program"; then
+  if ! bash "$(_bin repoman-check.sh)" --program "$program"; then
     echo "ERROR: $program: capability check failed (scope gate)." >&2
     return 1
   fi
@@ -146,7 +147,7 @@ _run_capability_check() {
 # 1 iff ALL enrolled repos failed (a partial failure is logged there and exits
 # 0); total failure is fatal because there is nothing cloned to scan.
 _run_clone_refresh() {
-  if ! "$(_bin repo-sync.sh)"; then
+  if ! bash "$(_bin repo-sync.sh)"; then
     echo "ERROR: clone refresh failed for all repos; cannot scan." >&2
     return 1
   fi
@@ -159,7 +160,7 @@ _run_clone_refresh() {
 _write_index() {
   local program="$1" display="$2" report_path="$3"
   local index_file="${REPOMAN_INDEX_FILE:-$(dirname "$report_path")/_index.json}"
-  if ! "$(_bin repoman-index.sh)" --index "$index_file" \
+  if ! bash "$(_bin repoman-index.sh)" --index "$index_file" \
         --program "$program" --display-name "$display" --report-path "$report_path"; then
     echo "WARNING: failed to update program registry at $index_file (program output was still produced)" >&2
   fi
@@ -192,20 +193,13 @@ main() {
   local scanner_script; scanner_script=$(_row_field "$row" 6)
   local display_name; display_name=$(_row_field "$row" 7)
   local report_path; report_path=$(_row_field "$row" 8)
+  local supports_dry_run; supports_dry_run=$(_row_field "$row" 9)
 
   # Validate / resolve any named targets against the enrolled set (defensive;
   # the skill has already reconciled them). Empty -> whole enrolled set.
   local resolved_set
   if ! resolved_set=$(_resolve_targets "${targets[@]+"${targets[@]}"}"); then
     return 1
-  fi
-
-  # --dry-run previews the resolved set only; it skips every execution
-  # precondition (output gate, capability check, clone refresh) and the exec.
-  if "$dry_run"; then
-    echo "[dry-run] would run $program (profile=$profile)"
-    [ -n "$resolved_set" ] && printf 'targets:\n%s\n' "$resolved_set"
-    return 0
   fi
 
   # Output routing must be set beforehand for programs that post results.
@@ -232,14 +226,29 @@ main() {
     fi
   fi
 
-  # Exec the program.
-  if ! "$(_bin "$scanner_script")"; then
+  # Exec the program. --dry-run is forwarded only to programs that accept it,
+  # so the program suppresses its own mutating tail (issue/PR/docs push).
+  # Invoke via an explicit `bash` interpreter rather than relying on the file's
+  # execute bit: the repo's scanners are not uniformly chmod +x (e.g.
+  # dep-bump-scanner.sh is 100644 in git) and the house convention everywhere
+  # else is `bash <script>`.
+  local -a prog_args=()
+  if "$dry_run" && [ "$supports_dry_run" = "yes" ]; then
+    prog_args+=(--dry-run)
+  fi
+  if ! bash "$(_bin "$scanner_script")" "${prog_args[@]+"${prog_args[@]}"}"; then
     echo "ERROR: $program exec failed" >&2; return 1
   fi
 
   # Register in the index (sole writer). Only for programs with the shape.
+  # The index must name where reports ACTUALLY landed: the scanner writes to
+  # ${REPORTS_DIR:-<program default>}, so honor a REPORTS_DIR override here too,
+  # falling back to the table's default. Otherwise the dashboard (which reads
+  # report_path to find latest.json) would look in the wrong place whenever
+  # REPORTS_DIR is set.
   if [ "$writes_index" = "yes" ]; then
-    _write_index "$program" "$display_name" "$report_path"
+    local effective_report_path="${REPORTS_DIR:-$report_path}"
+    _write_index "$program" "$display_name" "$effective_report_path"
   fi
   return 0
 }

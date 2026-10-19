@@ -211,6 +211,33 @@ Two accepted consequences (documented, not silent):
    `repoman run`.** The dogfood harness (which invokes scanners directly and
    asserts index wiring) is updated to drive through the run path.
 
+## Dry-run passthrough (added during implementation, 2026-10-18)
+
+**Why this was added (deviation from the original spec):** the real scanners
+perform **post-report push steps** — e.g. `link-health-scanner.sh` updates
+`docs/*.md` and opens PRs against a report repo *after* writing `latest.json`.
+Running them for real against a fresh or no-clone environment fails at that push
+step, which means (a) there is no safe way to preview "what would
+`repoman run <program>` do", and (b) the dogfood harness (which the spec requires
+us to extend and run before the PR) cannot drive the real scanner→index chain.
+The original spec was silent on dry-run; implementation showed a run
+orchestrator without one is incomplete.
+
+**Contract:** `repoman run <program> --dry-run` forwards `--dry-run` to the
+program when the program's table row declares it supports it
+(`supports_dry_run=yes`). The orchestrator still runs its own steps
+(resolution, output gate, capability check, clone refresh, exec, index write);
+`--dry-run` changes only what it hands the *program*, so the program itself
+suppresses its mutating tail (issue/PR creation, docs push). Programs that do
+not accept `--dry-run` (`weekly-report`) ignore the passthrough — the flag is
+simply not forwarded to them, and the run proceeds normally. The program table
+gains a `supports_dry_run` column for this.
+
+This supersedes the earlier implementation-internal reading of `--dry-run` as
+"preview resolution only, skip execution": the flag now means "a real run with
+the program's own dry-run engaged", which is the useful preview and what the
+dogfood exercises.
+
 ## Error handling & exit contract
 
 Non-interactive, fail-loud, legible to cron/standing-order wrappers.
