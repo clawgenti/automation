@@ -154,6 +154,25 @@ jq -r '"\(.repo):\(.number)"' "$TMPDIR/open_labeled.jsonl" 2>/dev/null \
 
 touch "$TMPDIR/evict_keys.txt"
 
+# Subset-run guard (see docs/specs run-path, "Subset-aware stateful scanners"):
+# on a narrowed run, open_keys.txt only covers the SCANNED repos, so an entry
+# from an UNSCANNED repo would wrongly look "no longer open/labeled" and be
+# evicted — discarding another repo's in-progress/reviewed claim. Scope the
+# open/labeled eviction to scanned repos; an unscanned entry is carried forward.
+# (TTL/stale checks below are time-based and still apply to all entries.)
+SCANNED_REPOS_FILE="$TMPDIR/scanned_repos.txt"
+if [ -n "${REPOMAN_SUBSET_REPOS:-}" ]; then
+  printf '%s\n' "$REPOMAN_SUBSET_REPOS" | grep . > "$SCANNED_REPOS_FILE" || true
+else
+  : > "$SCANNED_REPOS_FILE"   # empty => whole-set run => all repos are "scanned"
+fi
+# _repo_scanned <owner/name> -> 0 if this run scanned that repo (whole-set runs
+# scan every repo, so an empty scanned file means "yes").
+_repo_scanned() {
+  [ -s "$SCANNED_REPOS_FILE" ] || return 0
+  grep -qxF "$1" "$SCANNED_REPOS_FILE"
+}
+
 # Write state entries to temp files so we can iterate without piping into while
 jq -c '.reviewed[]?' "$TMPDIR/state.json" > "$TMPDIR/reviewed_entries.jsonl" 2>/dev/null || true
 jq -c '.in_progress[]?' "$TMPDIR/state.json" > "$TMPDIR/in_progress_entries.jsonl" 2>/dev/null || true
@@ -168,8 +187,10 @@ while IFS= read -r entry; do
   evict=false
   reason=""
 
-  # Not in open+labeled set (closed, merged, or label removed)
-  if ! grep -qF "$key" "$TMPDIR/open_keys.txt"; then
+  # Not in open+labeled set (closed, merged, or label removed) — but only
+  # meaningful for a repo this run actually scanned; an unscanned repo's entry
+  # is carried forward, not evicted.
+  if _repo_scanned "$repo" && ! grep -qF "$key" "$TMPDIR/open_keys.txt"; then
     evict=true
     reason="no longer open/labeled"
   fi
@@ -200,8 +221,8 @@ while IFS= read -r entry; do
   evict=false
   reason=""
 
-  # Not in open+labeled set
-  if ! grep -qF "$key" "$TMPDIR/open_keys.txt"; then
+  # Not in open+labeled set — scoped to scanned repos (see reviewed loop above).
+  if _repo_scanned "$repo" && ! grep -qF "$key" "$TMPDIR/open_keys.txt"; then
     evict=true
     reason="no longer open/labeled"
   fi
