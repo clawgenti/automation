@@ -203,6 +203,14 @@ against their previous **full-set** report:
   pr-review's state-eviction pass has the same shape: it drops the
   reviewed/in-progress entries of out-of-subset repos.
 
+**Signal:** on a narrowed run the orchestrator exports
+`REPOMAN_SUBSET_REPOS` (newline-delimited `owner/name`, the scanned set)
+alongside the narrowed `REPOMAN_REPOS_FILE`. Its presence tells a stateful
+scanner "this is a subset run — scope the diff, carry the rest forward, skip
+history." Absent ⇒ whole-set run ⇒ scanners behave exactly as before. A
+directly-invoked scanner (no orchestrator) never sees it, so direct runs are
+unchanged.
+
 **Contract (carry-forward):** a stateful scanner must scope its diff and its
 written state to the **repos it actually scanned this run**:
 
