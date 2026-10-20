@@ -301,4 +301,29 @@ REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" REPOMAN_PROGRAMS_DIR="$PRO
 grep -q -- "--dry-run" "$ARGSEEN" 2>/dev/null \
   && { echo "FAIL weekly-dry-run: --dry-run wrongly forwarded to weekly-report"; fail=1; }
 
+# --- needs_live forwarding: automation-health (previews by default, publishes
+# only on --live) must get --live on a normal run and --dry-run on a dry run ---
+cat > "$STUB_DIR/automation-health-dashboard.sh" <<STUB
+#!/usr/bin/env bash
+echo "ah-args: \$*" > "$ARGSEEN"
+exit 0
+STUB
+chmod +x "$STUB_DIR/automation-health-dashboard.sh"
+
+# normal run -> dashboard receives --live (so a scheduled run actually publishes)
+rm -f "$ARGSEEN"
+REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" REPOMAN_PROGRAMS_DIR="$PROGDIR" \
+  REPOMAN_INDEX_FILE="$TEST_TMPDIR/_index.json" bash "$RUN" automation-health >/dev/null 2>&1
+grep -q -- "--live" "$ARGSEEN" 2>/dev/null \
+  || { echo "FAIL needs-live: automation-health did not receive --live on a normal run ($(cat "$ARGSEEN" 2>/dev/null))"; fail=1; }
+
+# dry run -> dashboard receives --dry-run, NOT --live
+rm -f "$ARGSEEN"
+REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" REPOMAN_PROGRAMS_DIR="$PROGDIR" \
+  REPOMAN_INDEX_FILE="$TEST_TMPDIR/_index.json" bash "$RUN" automation-health --dry-run >/dev/null 2>&1
+grep -q -- "--dry-run" "$ARGSEEN" 2>/dev/null \
+  || { echo "FAIL needs-live-dry: automation-health did not receive --dry-run on a dry run"; fail=1; }
+grep -q -- "--live" "$ARGSEEN" 2>/dev/null \
+  && { echo "FAIL needs-live-dry: --live wrongly forwarded alongside --dry-run"; fail=1; }
+
 [ "$fail" -eq 0 ] && echo "PASS: repoman-run" || exit 1

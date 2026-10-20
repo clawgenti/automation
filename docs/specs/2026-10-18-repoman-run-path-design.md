@@ -65,8 +65,9 @@ repoman run <program> [target...]
   ├─ 2. targets given? -> project subset:
   │        the /repoman skill has ALREADY reconciled targets to a concrete
   │        owner/name list (org-vs-repo detection, bare-name resolution, >=2-owner
-  │        ambiguity) via repoman_match_name. The run path TRUSTS that list and
-  │        does not re-interpret it; it only validates each is enrolled.
+  │        ambiguity) via repoman_match_name. The run path validates each is
+  │        enrolled; a directly-supplied bare name is resolved and an ambiguous
+  │        one (≥2 owners) fails loud. See "Subset selection" below.
   │        write a throwaway repos.json to $TMPDIR; REPOMAN_REPOS_FILE points at it
   │        [skipped entirely for the index-consumer profile]
   ├─ 3. require output_repo set                  [only rows with posts_output=yes]
@@ -163,9 +164,16 @@ run to a named subset without touching any scanner:
 
 - **No targets** → no temp file; scanner reads the real `repos.json` (whole
   enrolled set). Common scheduled case.
-- **Targets** → the list is already reconciled by the skill. The run path
-  validates each is enrolled (`is_enrolled`, defensive) and fails loud naming
-  any that is not; it does not re-run org/ambiguity resolution.
+- **Targets** → normally the list is already reconciled by the skill. The run
+  path validates each is enrolled (`is_enrolled`, defensive) and fails loud
+  naming any that is not. Because the CLI can also be invoked directly with a
+  **bare** name (not only skill-reconciled `owner/name` slugs), it additionally
+  resolves a bare name via `repoman_match_name` and **fails loud on an ambiguous
+  bare name** — one enrolled under ≥2 owners — rather than silently broadening
+  the run to all of them; duplicate targets are deduped. It does not perform
+  org-expansion or any other reconciliation the skill owns. (Updated after
+  bb5dfb0; supersedes the earlier "trusts the list and does not re-interpret it"
+  wording.)
 
 **Writer invariant:** the temp file is a throwaway projection in `$TMPDIR`, so
 writing it directly does **not** violate the HARD INVARIANT (which guards only
@@ -176,6 +184,51 @@ never during a run, so there is no concurrent-writer race between the read and
 the projection in the normal flow. (Two simultaneous sessions — one running, one
 enrolling — are out of scope for v0.1.0; the read is a single atomic `jq` over a
 file the setup writer writes atomically.)
+
+### Subset-aware stateful scanners (REVISED — supersedes "scanners unchanged")
+
+The original design asserted the env-scoped temp file needed **no scanner
+changes**. Human review (PR #117) found that is wrong for the **stateful
+scanners** (link-health, dep-bump, pr-review), which diff the current scan
+against their previous **full-set** report:
+
+- link-health diffs current `broken.jsonl` against `.broken[]` from the prior
+  `latest.json`; dep-bump diffs against `.stale_prs[]`; the "fixed" set is
+  *in-prev-not-current*.
+- Under a subset run, `REPOMAN_REPOS_FILE` narrows the *current* scan to the
+  subset, but the *previous* report still holds every repo. Every out-of-subset
+  finding is therefore absent from the current scan, misclassified as **fixed**,
+  and its **GitHub issue is closed** — then `latest.json` is overwritten with
+  subset-only findings, so the next full run re-files them as new (duplicates).
+  pr-review's state-eviction pass has the same shape: it drops the
+  reviewed/in-progress entries of out-of-subset repos.
+
+**Contract (carry-forward):** a stateful scanner must scope its diff and its
+written state to the **repos it actually scanned this run**:
+
+1. Determine the scanned set (the enrolled set it looped over — the subset when
+   `REPOMAN_REPOS_FILE` is narrowed, else the whole set).
+2. **Diff only within the scanned set:** filter the previous report's findings to
+   those whose `.repo` (pr-review: the PR's repo) is in the scanned set *before*
+   computing fixed/new/recurring. An out-of-subset prior finding is never seen as
+   "fixed," so its issue is never closed.
+3. **Carry forward on write:** `latest.json` = (fresh findings for scanned repos)
+   ∪ (prior findings for unscanned repos), so the baseline stays whole and the
+   next full run diffs against a complete picture.
+4. **Skip `history.json` on a subset run.** `history.json` is a full-set trend
+   series consumed by the dashboard (aggregation) and by `generate_scan_id`
+   (same-day row count; indifferent). A subset row would distort the dashboard's
+   trend/impact math. **Trade-off (accepted):** subset runs are rare manual
+   recoveries (e.g. re-running one repo after a transient outage); their
+   issues-created/closed counts are intentionally *not* recorded to history, in
+   exchange for keeping the trend series honest and the system simple.
+
+A whole-set run (no targets) is unchanged: scanned set == enrolled set, the
+carry-forward merge is a no-op, and history is appended as before.
+
+This revises the earlier "scanners stay unchanged" boundary: the env-scoped temp
+file remains the selection mechanism, but the three stateful scanners gain
+subset-awareness in their diff + write + history steps.
 
 ### Output routing
 
@@ -237,6 +290,22 @@ This supersedes the earlier implementation-internal reading of `--dry-run` as
 "preview resolution only, skip execution": the flag now means "a real run with
 the program's own dry-run engaged", which is the useful preview and what the
 dogfood exercises.
+
+### Go-live for push-by-default-off programs (REVISED — PR #117)
+
+Forwarding `--dry-run` is not sufficient for programs whose **default is
+preview** and which publish only on an explicit `--live`. `automation-health-dashboard.sh`
+defaults to `DRY_RUN=true` and pushes the dashboard PR only with `--live`. The
+orchestrator originally forwarded only `--dry-run`, so a scheduled
+`repoman run automation-health` always previewed and **never published** — a
+daily job reporting success while the standing dashboard PR never updated.
+
+**Contract:** a program row declares whether a non-dry-run invocation must be
+told to go live (`needs_live=yes`). When set, the orchestrator forwards
+`--live` on a normal (non-`--dry-run`) run, and `--dry-run` on a dry run — never
+both. Programs without `needs_live` (the scanners, which push by default and are
+silenced by `--dry-run`) are unaffected. The program table gains a `needs_live`
+column; `automation-health` is the only `needs_live=yes` row in v0.1.0.
 
 ## Error handling & exit contract
 

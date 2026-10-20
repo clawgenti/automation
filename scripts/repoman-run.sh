@@ -26,13 +26,18 @@ EOF
 # Per-program step table. One row per program. Fields (tab-separated):
 #   1 program  2 profile  3 needs_clone_refresh  4 posts_output  5 writes_index
 #   6 scanner_script  7 display_name  8 report_path  9 supports_dry_run
+#   10 needs_live
+# needs_live=yes means the program PREVIEWS by default and publishes only on an
+# explicit --live (e.g. automation-health-dashboard); the orchestrator forwards
+# --live on a normal run for those. The scanners push by default (silenced by
+# --dry-run), so they are needs_live=no.
 # Must stay consistent with KNOWN_PROGRAMS in repoman-setup.sh (unify = #76).
 _PROGRAM_TABLE="\
-link-health	scanner	yes	yes	yes	link-health-scanner.sh	Link Health	$HOME/reports/link-health	yes
-dep-bump	scanner	yes	yes	yes	dep-bump-scanner.sh	Dependency Bumps	$HOME/reports/dep-bump	yes
-pr-review	scanner	no	no	no	pr-review-scanner.sh	PR Review		yes
-weekly-report	scanner	no	no	no	weekly-report.sh	Weekly Report		no
-automation-health	index-consumer	no	no	no	automation-health-dashboard.sh	Automation Health		yes"
+link-health	scanner	yes	yes	yes	link-health-scanner.sh	Link Health	$HOME/reports/link-health	yes	no
+dep-bump	scanner	yes	yes	yes	dep-bump-scanner.sh	Dependency Bumps	$HOME/reports/dep-bump	yes	no
+pr-review	scanner	no	no	no	pr-review-scanner.sh	PR Review		yes	no
+weekly-report	scanner	no	no	no	weekly-report.sh	Weekly Report		no	no
+automation-health	index-consumer	no	no	no	automation-health-dashboard.sh	Automation Health		yes	yes"
 
 # _program_row <program> -> echoes the tab-separated row, or returns 1 if unknown.
 # NOTE: the `while` runs in a subshell (right side of a pipe), so a `return`
@@ -205,6 +210,7 @@ main() {
   local display_name; display_name=$(_row_field "$row" 7)
   local report_path; report_path=$(_row_field "$row" 8)
   local supports_dry_run; supports_dry_run=$(_row_field "$row" 9)
+  local needs_live; needs_live=$(_row_field "$row" 10)
 
   # Validate / resolve any named targets against the enrolled set (defensive;
   # the skill has already reconciled them). Empty -> whole enrolled set.
@@ -243,15 +249,22 @@ main() {
     fi
   fi
 
-  # Exec the program. --dry-run is forwarded only to programs that accept it,
-  # so the program suppresses its own mutating tail (issue/PR/docs push).
+  # Exec the program. Flag forwarding:
+  #   --dry-run run: forward --dry-run to programs that accept it, so they
+  #     suppress their mutating tail (issue/PR/docs push).
+  #   normal run: for a needs_live program (previews by default, publishes only
+  #     on --live, e.g. the dashboard), forward --live so a scheduled run
+  #     actually publishes. The push-by-default scanners get nothing.
+  # Never forward both --dry-run and --live.
   # Invoke via an explicit `bash` interpreter rather than relying on the file's
   # execute bit: the repo's scanners are not uniformly chmod +x (e.g.
   # dep-bump-scanner.sh is 100644 in git) and the house convention everywhere
   # else is `bash <script>`.
   local -a prog_args=()
-  if "$dry_run" && [ "$supports_dry_run" = "yes" ]; then
-    prog_args+=(--dry-run)
+  if "$dry_run"; then
+    [ "$supports_dry_run" = "yes" ] && prog_args+=(--dry-run)
+  else
+    [ "$needs_live" = "yes" ] && prog_args+=(--live)
   fi
   if ! bash "$(_bin "$scanner_script")" "${prog_args[@]+"${prog_args[@]}"}"; then
     echo "ERROR: $program exec failed" >&2; return 1
