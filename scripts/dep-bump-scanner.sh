@@ -384,11 +384,31 @@ echo ""
 echo "--- Stale PRs: $STALE_COUNT ---"
 
 # --- Step 5: Diff against previous scan ---
+# Subset-run carry-forward (see docs/specs run-path, "Subset-aware stateful
+# scanners"): when REPOMAN_SUBSET_REPOS is set, split the previous report into
+# the stale PRs for SCANNED repos (diffed) and those for UNSCANNED repos
+# (carried forward into latest.json, never diffed, so their issues are never
+# mis-closed as resolved).
+ALL_PREV_STALE="$TMPDIR/all_prev_stale.jsonl"
 PREV_STALE="$TMPDIR/prev_stale.jsonl"
+CARRY_STALE="$TMPDIR/carry_stale.jsonl"
+: > "$CARRY_STALE"
 if [ -f "$REPORTS_DIR/latest.json" ]; then
-  jq -c '.stale_prs[]?' "$REPORTS_DIR/latest.json" > "$PREV_STALE" 2>/dev/null || true
+  jq -c '.stale_prs[]?' "$REPORTS_DIR/latest.json" > "$ALL_PREV_STALE" 2>/dev/null || true
 else
-  : > "$PREV_STALE"
+  : > "$ALL_PREV_STALE"
+fi
+if [ -n "${REPOMAN_SUBSET_REPOS:-}" ]; then
+  SCANNED_JSON=$(printf '%s\n' "$REPOMAN_SUBSET_REPOS" \
+    | jq -R 'select(length>0)' | jq -s '.' 2>/dev/null || echo '[]')
+  jq -c --argjson scanned "$SCANNED_JSON" \
+    'select(.repo as $r | $scanned | index($r))' \
+    "$ALL_PREV_STALE" > "$PREV_STALE" 2>/dev/null || : > "$PREV_STALE"
+  jq -c --argjson scanned "$SCANNED_JSON" \
+    'select(.repo as $r | ($scanned | index($r)) | not)' \
+    "$ALL_PREV_STALE" > "$CARRY_STALE" 2>/dev/null || : > "$CARRY_STALE"
+else
+  cp "$ALL_PREV_STALE" "$PREV_STALE"
 fi
 
 DIFF_KEY='[.repo, (.pr_number | tostring)] | join("|")'
@@ -533,7 +553,13 @@ done < "$TMPDIR/fixed_keys.txt"
 echo "Issues closed: $ISSUES_CLOSED"
 
 # --- Step 8: Write reports ---
+# On a subset run, carry the unscanned repos' prior stale PRs forward so the
+# baseline stays whole (they already carry their issue_number etc. verbatim).
 STALE_ARRAY=$(jq -s '.' "$TMPDIR/stale_prs.jsonl" 2>/dev/null || echo "[]")
+if [ -s "$CARRY_STALE" ]; then
+  CARRY_ARRAY=$(jq -s '.' "$CARRY_STALE" 2>/dev/null || echo "[]")
+  STALE_ARRAY=$(jq -n --argjson a "$STALE_ARRAY" --argjson b "$CARRY_ARRAY" '$a + $b' 2>/dev/null || printf '%s' "$STALE_ARRAY")
+fi
 COVERAGE_ARRAY=$(jq -s '.' "$TMPDIR/coverage_gaps.jsonl" 2>/dev/null || echo "[]")
 ECO_SUMMARY=$(jq -s 'group_by(.ecosystem) | map({key: .[0].ecosystem, value: length}) | from_entries' \
   "$TMPDIR/all_prs.jsonl" 2>/dev/null || echo "{}")
@@ -584,8 +610,15 @@ HISTORY_ROW=$(jq -nc \
     new: $new_count, fixed: $fixed_count,
     issues_created: $issues_created, issues_closed: $issues_closed}')
 
-append_history_row "$REPORTS_DIR" "$HISTORY_ROW" "$MAX_HISTORY_ROWS"
-echo "Appended to $REPORTS_DIR/history.json"
+# Skip the history append on a subset run (rare manual recovery): history.json
+# is a full-set trend series and a partial row would distort it. See
+# docs/specs run-path, "Subset-aware stateful scanners".
+if [ -n "${REPOMAN_SUBSET_REPOS:-}" ]; then
+  echo "Subset run — skipping history.json append (trend series stays full-set)"
+else
+  append_history_row "$REPORTS_DIR" "$HISTORY_ROW" "$MAX_HISTORY_ROWS"
+  echo "Appended to $REPORTS_DIR/history.json"
+fi
 
 # Note: _index.json registration is performed by the run-path orchestrator
 # (scripts/repoman-run.sh), the sole index writer — not here. Running this
