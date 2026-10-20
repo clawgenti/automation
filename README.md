@@ -24,6 +24,25 @@ reports/           (gitignored) Runtime data stays on remote host only
 
 Shared helpers live in `scripts/program-lib.sh`, a thin aggregator that sources four focused library modules (see [Library structure & portability](#library-structure--portability)). Repo coverage comes from the `config/core-repos.txt` allowlist via `get_core_repos()` (one **bare repo name** per line -- the owner is prepended from the active org; `#` comments and blank lines allowed) -- edit that file to change which repos are scanned.
 
+### Running a program (RepoMan run path)
+
+Under RepoMan, programs are run through the **orchestrator** rather than by invoking a scanner directly:
+
+```bash
+# Run a program across all enrolled repos
+bash scripts/repoman-run.sh <program>
+
+# Run across a named subset (e.g. re-run one repo after a transient failure)
+bash scripts/repoman-run.sh <program> owner/name [owner/name ...]
+
+# Preview without side effects (forwards the program's own dry-run / omits --live)
+bash scripts/repoman-run.sh <program> --dry-run
+```
+
+`<program>` is one of `link-health`, `dep-bump`, `pr-review`, `weekly-report`, `automation-health`. The orchestrator resolves the repo set, runs the capability check and clone refresh the program needs, execs it, and writes its `_index.json` entry — it is the **sole writer of `_index.json`**, so a program run directly (the commands in the table above) no longer updates the registry the dashboard reads. `repoman run <program>` is the blessed path for an indexed run.
+
+There is no `repoman` executable in this repo yet; `repoman run <program>` maps to `bash scripts/repoman-run.sh <program>`. In a RepoMan deployment the `/repoman` skill (in `rossoctl/agent-skills`) performs that mapping from a Claude Code / OpenClaw agent; scheduled DAM/OpenClaw jobs invoke the same command string. Standing-orders that still call scanners directly are tracked for migration in [#118](https://github.com/rossoctl/automation/issues/118). See the run-path design in `docs/specs/` and the epic [#72](https://github.com/rossoctl/automation/issues/72).
+
 ## Library structure & portability
 
 Shared shell helpers live in four flat modules under `scripts/`, sourced through the `program-lib.sh` aggregator so program scripts can `source "$SCRIPT_DIR/program-lib.sh"` unchanged:
