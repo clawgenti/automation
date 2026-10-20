@@ -238,6 +238,11 @@ main() {
       return 1
     fi
     export REPOMAN_REPOS_FILE="$subset_file"
+    # Explicit subset signal for stateful scanners: a narrowed run must scope its
+    # diff/close/write to only these repos and carry the rest of the previous
+    # report forward, and must NOT append a (partial) history row. Newline-
+    # delimited owner/name. Absent => whole-set run (scanners behave as before).
+    export REPOMAN_SUBSET_REPOS="$resolved_set"
   fi
 
   # Execution preconditions. The index-consumer profile scans nothing, so it

@@ -159,11 +159,35 @@ echo "Repos scanned: $REPOS_SCANNED (failed: $REPOS_FAILED)"
 echo "Total links: $TOTAL_LINKS, Total errors: $TOTAL_ERRORS"
 
 # --- Load previous scan for diffing ---
+# Subset-run carry-forward (see docs/specs run-path, "Subset-aware stateful
+# scanners"): when REPOMAN_SUBSET_REPOS is set, this run scanned only those
+# repos. The diff must compare like-for-like, so the previous report is split
+# into the findings for SCANNED repos (which participate in the diff) and the
+# findings for UNSCANNED repos (carried forward verbatim into latest.json,
+# never diffed, so their issues are never mis-closed as "fixed").
+ALL_PREV_BROKEN="$TMPDIR/all_prev_broken.jsonl"
 PREV_BROKEN="$TMPDIR/prev_broken.jsonl"
+CARRY_BROKEN="$TMPDIR/carry_broken.jsonl"
+: > "$CARRY_BROKEN"
 if [ -f "$REPORTS_DIR/latest.json" ]; then
-  jq -c '.broken[]?' "$REPORTS_DIR/latest.json" > "$PREV_BROKEN" 2>/dev/null || true
+  jq -c '.broken[]?' "$REPORTS_DIR/latest.json" > "$ALL_PREV_BROKEN" 2>/dev/null || true
 else
-  : > "$PREV_BROKEN"
+  : > "$ALL_PREV_BROKEN"
+fi
+if [ -n "${REPOMAN_SUBSET_REPOS:-}" ]; then
+  # Build a JSON array of the scanned owner/name slugs once, pass via --argjson.
+  SCANNED_JSON=$(printf '%s\n' "$REPOMAN_SUBSET_REPOS" \
+    | jq -R 'select(length>0)' | jq -s '.' 2>/dev/null || echo '[]')
+  # prev findings whose .repo IS in the scanned set -> participate in the diff
+  jq -c --argjson scanned "$SCANNED_JSON" \
+    'select(.repo as $r | $scanned | index($r))' \
+    "$ALL_PREV_BROKEN" > "$PREV_BROKEN" 2>/dev/null || : > "$PREV_BROKEN"
+  # prev findings whose .repo is NOT in the scanned set -> carried forward
+  jq -c --argjson scanned "$SCANNED_JSON" \
+    'select(.repo as $r | ($scanned | index($r)) | not)' \
+    "$ALL_PREV_BROKEN" > "$CARRY_BROKEN" 2>/dev/null || : > "$CARRY_BROKEN"
+else
+  cp "$ALL_PREV_BROKEN" "$PREV_BROKEN"
 fi
 
 # --- Compute diff using shared library ---
@@ -314,6 +338,10 @@ done < "$TMPDIR/fixed_keys.txt"
 echo "Issues closed: $ISSUES_CLOSED"
 
 # --- Write latest.json ---
+# Fresh findings for the scanned repos get the standard enrichment. On a subset
+# run, the previous findings for UNSCANNED repos are carried forward verbatim
+# (they already carry issue_number/first_detected from the prior report), so the
+# baseline stays whole and the next full run diffs against a complete picture.
 BROKEN_ARRAY=$(jq -s '
   [.[] | . + {
     issue_number: null,
@@ -321,6 +349,10 @@ BROKEN_ARRAY=$(jq -s '
     context: ""
   }]
 ' "$TMPDIR/broken.jsonl" 2>/dev/null || echo "[]")
+if [ -s "$CARRY_BROKEN" ]; then
+  CARRY_ARRAY=$(jq -s '.' "$CARRY_BROKEN" 2>/dev/null || echo "[]")
+  BROKEN_ARRAY=$(jq -n --argjson a "$BROKEN_ARRAY" --argjson b "$CARRY_ARRAY" '$a + $b' 2>/dev/null || printf '%s' "$BROKEN_ARRAY")
+fi
 
 LATEST_JSON=$(cat << LATEST_EOF
 {
@@ -361,8 +393,18 @@ HISTORY_ROW=$(cat << HIST_EOF
 HIST_EOF
 )
 
-append_history_row "$REPORTS_DIR" "$HISTORY_ROW" "$MAX_HISTORY_ROWS"
-echo "Appended to history.json"
+# history.json is a full-set trend series (consumed by the dashboard). A subset
+# run is a rare manual recovery over part of the enrolled set; appending its
+# partial counts would distort the trend, so we skip the history append on a
+# subset run. (Trade-off: that run's issues-created/closed counts are not
+# recorded to history — accepted; see docs/specs run-path, "Subset-aware
+# stateful scanners".)
+if [ -n "${REPOMAN_SUBSET_REPOS:-}" ]; then
+  echo "Subset run — skipping history.json append (trend series stays full-set)"
+else
+  append_history_row "$REPORTS_DIR" "$HISTORY_ROW" "$MAX_HISTORY_ROWS"
+  echo "Appended to history.json"
+fi
 
 # Note: _index.json registration is performed by the run-path orchestrator
 # (scripts/repoman-run.sh), the sole index writer — not here. Running this
