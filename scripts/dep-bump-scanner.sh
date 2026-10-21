@@ -579,6 +579,20 @@ fi
 ECO_SUMMARY=$(jq -s 'group_by(.ecosystem) | map({key: .[0].ecosystem, value: length}) | from_entries' \
   "$TMPDIR/all_prs.jsonl" 2>/dev/null || echo "{}")
 
+# On a subset run the lists above are whole-set (carried forward), so the scalar
+# totals must be whole-set too, or the dashboard computes ratios across mixed
+# scopes (e.g. subset total_open_prs vs whole-set stale_prs -> negative SLA).
+# We cannot recompute per-repo raw counts for the unscanned repos (not stored),
+# so we keep the PRIOR report's whole-set scalars for the population totals and
+# let only the per-run delta (new/fixed) reflect this subset run. Falls back to
+# the freshly-computed subset values when there is no prior report.
+if [ -n "${REPOMAN_SUBSET_REPOS:-}" ] && [ -f "$REPORTS_DIR/latest.json" ]; then
+  REPOS_SCANNED=$(jq -r '.repos_scanned // '"$REPOS_SCANNED" "$REPORTS_DIR/latest.json" 2>/dev/null || echo "$REPOS_SCANNED")
+  REPOS_WITH_DEPENDABOT=$(jq -r '.repos_with_dependabot // '"$REPOS_WITH_DEPENDABOT" "$REPORTS_DIR/latest.json" 2>/dev/null || echo "$REPOS_WITH_DEPENDABOT")
+  TOTAL_OPEN_PRS=$(jq -r '.total_open_prs // '"$TOTAL_OPEN_PRS" "$REPORTS_DIR/latest.json" 2>/dev/null || echo "$TOTAL_OPEN_PRS")
+  ECO_SUMMARY=$(jq -c '.ecosystem_summary // {}' "$REPORTS_DIR/latest.json" 2>/dev/null || echo "$ECO_SUMMARY")
+fi
+
 LATEST_JSON=$(jq -nc \
   --arg scan_id "$SCAN_ID" \
   --arg date "$SCAN_TIME" \
@@ -598,8 +612,14 @@ LATEST_JSON=$(jq -nc \
     coverage_gaps: $coverage_gaps, ecosystem_summary: $ecosystem_summary,
     delta: {new: $new_count, fixed: $fixed_count, recurring: $recurring_count}}')
 
-write_report_latest "$REPORTS_DIR" "$LATEST_JSON"
-echo "Wrote $REPORTS_DIR/latest.json"
+# A dry run must NOT write the baseline (see link-health for the rationale):
+# overwriting latest.json would make the next real run skip filing/closing.
+if [ "$DRY_RUN" = true ]; then
+  echo "[DRY RUN] Would write $REPORTS_DIR/latest.json (baseline left unchanged)"
+else
+  write_report_latest "$REPORTS_DIR" "$LATEST_JSON"
+  echo "Wrote $REPORTS_DIR/latest.json"
+fi
 
 # --- History row ---
 STALE_SECURITY=$(jq -s '[.[] | select(.category == "security")] | length' "$TMPDIR/stale_prs.jsonl" 2>/dev/null || echo 0)
@@ -628,7 +648,9 @@ HISTORY_ROW=$(jq -nc \
 # Skip the history append on a subset run (rare manual recovery): history.json
 # is a full-set trend series and a partial row would distort it. See
 # docs/specs run-path, "Subset-aware stateful scanners".
-if [ -n "${REPOMAN_SUBSET_REPOS:-}" ]; then
+if [ "$DRY_RUN" = true ]; then
+  echo "[DRY RUN] Would append history.json row (skipped)"
+elif [ -n "${REPOMAN_SUBSET_REPOS:-}" ]; then
   echo "Subset run — skipping history.json append (trend series stays full-set)"
 else
   append_history_row "$REPORTS_DIR" "$HISTORY_ROW" "$MAX_HISTORY_ROWS"

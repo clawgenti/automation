@@ -42,6 +42,13 @@ cat > "$REPORTS/state.json" <<JSON
 {"in_progress":[{"repo":"bob/b","number":7,"head_sha":"abc","started_at":"$NOW"}],
  "reviewed":[{"repo":"bob/b","number":9,"head_sha":"def","reviewed_at":"$NOW"}]}
 JSON
+# Prior latest.json: an eligible PR in bob/b (out of subset) that must be carried
+# forward; a prior history with 1 row so the skip-on-subset is observable.
+cat > "$REPORTS/latest.json" <<JSON
+{"scan_id":"prev-1","date":"2026-10-01T00:00:00Z","repos_scanned":2,
+ "candidates_found":1,"eligible_prs":[{"repo":"bob/b","number":11}]}
+JSON
+printf '[{"scan_id":"prev-1","eligible":1}]\n' > "$REPORTS/history.json"
 
 # Subset run: scan ONLY alice/a.
 SUBSET="$TEST_TMPDIR/subset.json"
@@ -63,6 +70,22 @@ if [ "$rv" = "1" ]; then
   echo "PASS: bob/b reviewed entry carried forward"
 else
   echo "FAIL: bob/b reviewed entry evicted on subset run (count=$rv)"; fail=1
+fi
+
+# Step 3: bob/b's eligible PR (out of subset) carried forward into latest.json.
+elig=$(jq -r '[.eligible_prs[] | select(.repo=="bob/b")] | length' "$REPORTS/latest.json" 2>/dev/null)
+if [ "$elig" = "1" ]; then
+  echo "PASS: bob/b eligible_pr carried forward into latest.json"
+else
+  echo "FAIL: bob/b eligible_pr not carried forward (count=$elig):"; jq -c '.eligible_prs' "$REPORTS/latest.json" 2>/dev/null; fail=1
+fi
+
+# Step 4: history.json not appended on a subset run (still 1 row).
+hrows=$(jq 'length' "$REPORTS/history.json" 2>/dev/null)
+if [ "$hrows" = "1" ]; then
+  echo "PASS: history.json not appended on subset run (still $hrows row)"
+else
+  echo "FAIL: history.json grew to $hrows rows on a subset run (expected 1)"; fail=1
 fi
 
 [ "$fail" -eq 0 ] && echo "PASS" || { echo "FAILURES"; exit 1; }

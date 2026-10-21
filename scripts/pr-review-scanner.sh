@@ -345,6 +345,20 @@ else
     --argjson eligible_prs "$(cat "$QUEUE_FILE")" \
     '{scan_id: $scan_id, date: $date, repos_scanned: $repos_scanned, candidates_found: $candidates_found, eligible_prs: $eligible_prs}')
 
+  # Subset carry-forward (steps 3/4 of the run-path spec's contract): on a
+  # narrowed run, merge the prior latest.json's eligible_prs for UNSCANNED repos
+  # back in, so the fixer's queue (which reads .eligible_prs) is not truncated to
+  # just the scanned repos.
+  if [ -n "${REPOMAN_SUBSET_REPOS:-}" ] && [ -f "$REPORTS_DIR/latest.json" ]; then
+    SCANNED_JSON=$(printf '%s\n' "$REPOMAN_SUBSET_REPOS" \
+      | jq -R 'select(length>0)' | jq -s '.' 2>/dev/null || echo '[]')
+    CARRY_ELIGIBLE=$(jq -c --argjson scanned "$SCANNED_JSON" \
+      '[.eligible_prs[]? | select(.repo as $r | ($scanned | index($r)) | not)]' \
+      "$REPORTS_DIR/latest.json" 2>/dev/null || echo '[]')
+    LATEST_JSON=$(printf '%s' "$LATEST_JSON" \
+      | jq -c --argjson carry "$CARRY_ELIGIBLE" '.eligible_prs += $carry' 2>/dev/null || printf '%s' "$LATEST_JSON")
+  fi
+
   write_report_latest "$REPORTS_DIR" "$LATEST_JSON"
   [ "$VERBOSE" = true ] && echo "Wrote $REPORTS_DIR/latest.json" >&2
 
@@ -352,19 +366,23 @@ else
   pr_review_state_write "$TMPDIR/state.json" "$REPORTS_DIR/state.json" "pr-review-scanner"
   [ "$VERBOSE" = true ] && echo "Wrote $REPORTS_DIR/state.json" >&2
 
-  # history.json
-  HISTORY_ROW=$(jq -n \
-    --arg scan_id "$SCAN_ID" \
-    --arg date "$SCAN_TIME" \
-    --argjson repos_scanned "$REPOS_SCANNED" \
-    --argjson eligible "$ELIGIBLE" \
-    --argjson skipped_in_progress "$SKIPPED_IN_PROGRESS" \
-    --argjson skipped_reviewed "$SKIPPED_REVIEWED" \
-    --argjson evicted "$EVICTED" \
-    '{scan_id: $scan_id, date: $date, repos_scanned: $repos_scanned, eligible: $eligible, skipped_in_progress: $skipped_in_progress, skipped_reviewed: $skipped_reviewed, evicted: $evicted}')
+  # history.json — skip on a subset run (full-set trend series; see run-path spec).
+  if [ -n "${REPOMAN_SUBSET_REPOS:-}" ]; then
+    [ "$VERBOSE" = true ] && echo "Subset run — skipping history.json append" >&2
+  else
+    HISTORY_ROW=$(jq -n \
+      --arg scan_id "$SCAN_ID" \
+      --arg date "$SCAN_TIME" \
+      --argjson repos_scanned "$REPOS_SCANNED" \
+      --argjson eligible "$ELIGIBLE" \
+      --argjson skipped_in_progress "$SKIPPED_IN_PROGRESS" \
+      --argjson skipped_reviewed "$SKIPPED_REVIEWED" \
+      --argjson evicted "$EVICTED" \
+      '{scan_id: $scan_id, date: $date, repos_scanned: $repos_scanned, eligible: $eligible, skipped_in_progress: $skipped_in_progress, skipped_reviewed: $skipped_reviewed, evicted: $evicted}')
 
-  append_history_row "$REPORTS_DIR" "$HISTORY_ROW" "$MAX_HISTORY_ROWS"
-  [ "$VERBOSE" = true ] && echo "Appended to $REPORTS_DIR/history.json" >&2
+    append_history_row "$REPORTS_DIR" "$HISTORY_ROW" "$MAX_HISTORY_ROWS"
+    [ "$VERBOSE" = true ] && echo "Appended to $REPORTS_DIR/history.json" >&2
+  fi
 fi
 
 # --- Output (backward compatible) ---

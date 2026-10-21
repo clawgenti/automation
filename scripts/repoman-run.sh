@@ -13,11 +13,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/program-lib.sh"
 
 usage() {
-  cat <<'EOF'
+  # Program list is DERIVED from the table (via _known_programs) so it cannot
+  # drift from what is actually runnable.
+  cat <<EOF
 Usage: repoman-run.sh <program> [target...] [--dry-run] [--help]
 
 Run a RepoMan program against the enrolled repos (or a named subset).
-<program> is one of: link-health dep-bump pr-review weekly-report automation-health
+<program> is one of: $(_known_programs)
 [target...] are owner/name slugs or bare names ALREADY reconciled by the skill.
 Non-interactive: output routing must be set beforehand (repoman-setup.sh set-output).
 EOF

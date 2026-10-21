@@ -354,6 +354,15 @@ if [ -s "$CARRY_BROKEN" ]; then
   BROKEN_ARRAY=$(jq -n --argjson a "$BROKEN_ARRAY" --argjson b "$CARRY_ARRAY" '$a + $b' 2>/dev/null || printf '%s' "$BROKEN_ARRAY")
 fi
 
+# On a subset run the broken[] list is whole-set (carried forward), so keep the
+# prior report's whole-set scalar totals rather than the subset-only counts, or
+# the dashboard would read a subset repos_scanned/total_links_checked beside a
+# whole-set broken[]. Per-run delta (new/fixed/recurring) still reflects this run.
+if [ -n "${REPOMAN_SUBSET_REPOS:-}" ] && [ -f "$REPORTS_DIR/latest.json" ]; then
+  REPOS_SCANNED=$(jq -r '.repos_scanned // '"$REPOS_SCANNED" "$REPORTS_DIR/latest.json" 2>/dev/null || echo "$REPOS_SCANNED")
+  TOTAL_LINKS=$(jq -r '.total_links_checked // '"$TOTAL_LINKS" "$REPORTS_DIR/latest.json" 2>/dev/null || echo "$TOTAL_LINKS")
+fi
+
 LATEST_JSON=$(cat << LATEST_EOF
 {
   "scan_id": "$SCAN_ID",
@@ -373,8 +382,15 @@ LATEST_JSON=$(cat << LATEST_EOF
 LATEST_EOF
 )
 
-write_report_latest "$REPORTS_DIR" "$LATEST_JSON"
-echo "Wrote latest.json"
+# A dry run must NOT write the baseline: overwriting latest.json would make the
+# next real run see these findings as "recurring" (not "new") and skip filing
+# them, and skip closing anything shown as fixed here. Preview only.
+if [ "$DRY_RUN" = true ]; then
+  echo "[DRY RUN] Would write latest.json (baseline left unchanged)"
+else
+  write_report_latest "$REPORTS_DIR" "$LATEST_JSON"
+  echo "Wrote latest.json"
+fi
 
 # --- Append to history.json ---
 HISTORY_ROW=$(cat << HIST_EOF
@@ -399,7 +415,9 @@ HIST_EOF
 # subset run. (Trade-off: that run's issues-created/closed counts are not
 # recorded to history — accepted; see docs/specs run-path, "Subset-aware
 # stateful scanners".)
-if [ -n "${REPOMAN_SUBSET_REPOS:-}" ]; then
+if [ "$DRY_RUN" = true ]; then
+  echo "[DRY RUN] Would append history.json row (skipped)"
+elif [ -n "${REPOMAN_SUBSET_REPOS:-}" ]; then
   echo "Subset run — skipping history.json append (trend series stays full-set)"
 else
   append_history_row "$REPORTS_DIR" "$HISTORY_ROW" "$MAX_HISTORY_ROWS"
