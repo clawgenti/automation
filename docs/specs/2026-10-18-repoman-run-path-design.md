@@ -258,7 +258,9 @@ so a dry run silently overwrote the baseline: the next real run then saw the
 dry-run's findings as *recurring* (not *new*) and skipped filing them, and saw
 nothing to close. `pr-review-scanner.sh` already gates all of
 `latest.json`/`state.json`/`history.json` on dry-run; link-health and dep-bump
-must do the same. (This is why the documented "safe preview" claim must hold:
+must do the same. The orchestrator likewise does **not** write the
+`_index.json` entry on a dry run — registering a program whose dry run wrote no
+`latest.json` would point the dashboard at a nonexistent report. (This is why the documented "safe preview" claim must hold:
 `repoman run <program> --dry-run` is side-effect-free.)
 
 A whole-set run (no targets) is unchanged: scanned set == enrolled set, the
