@@ -326,4 +326,19 @@ grep -q -- "--dry-run" "$ARGSEEN" 2>/dev/null \
 grep -q -- "--live" "$ARGSEEN" 2>/dev/null \
   && { echo "FAIL needs-live-dry: --live wrongly forwarded alongside --dry-run"; fail=1; }
 
+# --- repo-sync (sync profile): runnable via the run path, no gate/index ---
+cat > "$STUB_DIR/repo-sync.sh" <<STUB
+#!/usr/bin/env bash
+echo "ran-repo-sync" >> "$TEST_TMPDIR/calls"
+exit 0
+STUB
+chmod +x "$STUB_DIR/repo-sync.sh"
+: > "$TEST_TMPDIR/calls"
+REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" REPOMAN_PROGRAMS_DIR="$PROGDIR" \
+  REPOMAN_INDEX_FILE="$TEST_TMPDIR/_index.json" bash "$RUN" repo-sync >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL repo-sync: rc=$rc (should be runnable)"; fail=1; }
+grep -q "ran-repo-sync" "$TEST_TMPDIR/calls" || { echo "FAIL repo-sync: did not exec repo-sync.sh"; fail=1; }
+grep -q "ran-check" "$TEST_TMPDIR/calls" && { echo "FAIL repo-sync: ran a capability check (sync profile should not)"; fail=1; }
+grep -q "^index " "$TEST_TMPDIR/calls" && { echo "FAIL repo-sync: wrote an index entry (sync profile should not)"; fail=1; }
+
 [ "$fail" -eq 0 ] && echo "PASS: repoman-run" || exit 1

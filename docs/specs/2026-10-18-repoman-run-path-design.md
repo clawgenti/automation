@@ -114,10 +114,13 @@ parsed per program (or an equivalent lookup function). One row per program:
 | `pr-review` | scanner | no | no | no | `pr-review-scanner.sh` |
 | `weekly-report` | scanner | no | no | no | `weekly-report.sh` |
 | `automation-health` | index-consumer | no | no | no | `automation-health-dashboard.sh` |
+| `repo-sync` | sync | no | no | no | `repo-sync.sh` |
 
 Index rows additionally carry `index_display_name` (e.g. `Link Health`) and
 `report_path` (e.g. `~/reports/link-health`) — the fields `repoman-index.sh`
-requires.
+requires. The table must list every `KNOWN_PROGRAMS` entry (so each enrollable
+program is runnable via `repoman run`); the two lists are kept in sync until
+#76 unifies them.
 
 **Rationale per non-obvious row:**
 - `pr-review` posts a GitHub *review* in place, not issues to a report repo, so
@@ -129,6 +132,13 @@ requires.
 - `automation-health` *consumes* `_index.json` (it is the dashboard); the
   `index-consumer` profile skips clone-refresh, subset projection, and the
   scope gate, and simply execs the dashboard script.
+- `repo-sync` *is* the clone-refresh infrastructure (clones/pulls the enrolled
+  set, read-only toward GitHub); the `sync` profile likewise skips subset
+  projection, the scope gate, and a separate clone-refresh step (it would be
+  self-referential), and takes no `output_repo`/index. It is included so an
+  enrolled program is runnable via `repoman run repo-sync` (consistency with
+  `KNOWN_PROGRAMS`); subset selection, capability gate, and clone refresh apply
+  to the `scanner` profile only.
 
 **Adding a new program = adding one row.** The orchestrator reads the row's
 fields to decide steps and to write the index entry; a program never

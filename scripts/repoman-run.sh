@@ -37,7 +37,8 @@ link-health	scanner	yes	yes	yes	link-health-scanner.sh	Link Health	$HOME/reports
 dep-bump	scanner	yes	yes	yes	dep-bump-scanner.sh	Dependency Bumps	$HOME/reports/dep-bump	yes	no
 pr-review	scanner	no	no	no	pr-review-scanner.sh	PR Review		yes	no
 weekly-report	scanner	no	no	no	weekly-report.sh	Weekly Report		no	no
-automation-health	index-consumer	no	no	no	automation-health-dashboard.sh	Automation Health		yes	yes"
+automation-health	index-consumer	no	no	no	automation-health-dashboard.sh	Automation Health		yes	yes
+repo-sync	sync	no	no	no	repo-sync.sh	Repo Sync		no	no"
 
 # _program_row <program> -> echoes the tab-separated row, or returns 1 if unknown.
 # NOTE: the `while` runs in a subshell (right side of a pipe), so a `return`
@@ -226,7 +227,9 @@ main() {
 
   # Narrow to a subset via a throwaway repos file when targets were named.
   # index-consumer programs scan nothing, so they never project a subset.
-  if [ "$profile" != "index-consumer" ] && [ -n "$resolved_set" ]; then
+  # Only the scanner profile narrows to a subset. index-consumer (dashboard)
+  # and sync (repo-sync) act over the whole enrolled set regardless of targets.
+  if [ "$profile" = "scanner" ] && [ -n "$resolved_set" ]; then
     # Create the temp dir in the PARENT so the EXIT trap (which reads the
     # global RUN_TMPDIR) can clean it; a dir made inside _project_subset's
     # command-substitution subshell would be invisible to the trap and leak.
@@ -245,9 +248,10 @@ main() {
     export REPOMAN_SUBSET_REPOS="$resolved_set"
   fi
 
-  # Execution preconditions. The index-consumer profile scans nothing, so it
-  # skips the capability gate and clone refresh entirely.
-  if [ "$profile" != "index-consumer" ]; then
+  # Execution preconditions apply to the scanner profile only. index-consumer
+  # (dashboard) reads the index and needs no scope/clone; sync (repo-sync) IS the
+  # clone refresh and takes no PAT scopes — both skip the gate and refresh.
+  if [ "$profile" = "scanner" ]; then
     _run_capability_check "$program" || return 1
     if [ "$needs_clone" = "yes" ]; then
       _run_clone_refresh || return 1

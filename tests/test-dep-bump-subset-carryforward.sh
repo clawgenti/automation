@@ -47,7 +47,9 @@ cat > "$REPORTS/latest.json" <<'JSON'
     {"repo":"bob/b","pr_number":7,"title":"bump lodash","category":"security",
      "age_days":30,"issue_number":42}
   ],
-  "coverage_gaps": [],
+  "coverage_gaps": [
+    {"repo":"bob/b","reason":"no dependabot config"}
+  ],
   "delta": {"new":1,"fixed":0,"recurring":0}
 }
 JSON
@@ -70,6 +72,14 @@ if [ "$carried" = "1" ]; then
   echo "PASS: bob/b stale PR carried forward into latest.json"
 else
   echo "FAIL: bob/b stale PR not carried forward (count=$carried):"; jq -c '.stale_prs' "$REPORTS/latest.json" 2>/dev/null; fail=1
+fi
+
+# bob/b's coverage_gap must also be carried forward (not just stale_prs).
+cov=$(jq -r '[.coverage_gaps[] | select(.repo=="bob/b")] | length' "$REPORTS/latest.json" 2>/dev/null)
+if [ "$cov" = "1" ]; then
+  echo "PASS: bob/b coverage_gap carried forward"
+else
+  echo "FAIL: bob/b coverage_gap not carried forward (count=$cov):"; jq -c '.coverage_gaps' "$REPORTS/latest.json" 2>/dev/null; fail=1
 fi
 
 hrows=$(jq 'length' "$REPORTS/history.json" 2>/dev/null)

@@ -398,6 +398,11 @@ if [ -f "$REPORTS_DIR/latest.json" ]; then
 else
   : > "$ALL_PREV_STALE"
 fi
+# Unscanned repos' coverage_gaps are also carried forward (they are per-.repo
+# state that a subset run does not re-measure; dropping them would blank those
+# repos' coverage until the next full run).
+CARRY_COVERAGE="$TMPDIR/carry_coverage.jsonl"
+: > "$CARRY_COVERAGE"
 if [ -n "${REPOMAN_SUBSET_REPOS:-}" ]; then
   SCANNED_JSON=$(printf '%s\n' "$REPOMAN_SUBSET_REPOS" \
     | jq -R 'select(length>0)' | jq -s '.' 2>/dev/null || echo '[]')
@@ -407,6 +412,12 @@ if [ -n "${REPOMAN_SUBSET_REPOS:-}" ]; then
   jq -c --argjson scanned "$SCANNED_JSON" \
     'select(.repo as $r | ($scanned | index($r)) | not)' \
     "$ALL_PREV_STALE" > "$CARRY_STALE" 2>/dev/null || : > "$CARRY_STALE"
+  # coverage_gaps for unscanned repos -> carried forward
+  if [ -f "$REPORTS_DIR/latest.json" ]; then
+    jq -c --argjson scanned "$SCANNED_JSON" \
+      '.coverage_gaps[]? | select(.repo as $r | ($scanned | index($r)) | not)' \
+      "$REPORTS_DIR/latest.json" > "$CARRY_COVERAGE" 2>/dev/null || : > "$CARRY_COVERAGE"
+  fi
 else
   cp "$ALL_PREV_STALE" "$PREV_STALE"
 fi
@@ -561,6 +572,10 @@ if [ -s "$CARRY_STALE" ]; then
   STALE_ARRAY=$(jq -n --argjson a "$STALE_ARRAY" --argjson b "$CARRY_ARRAY" '$a + $b' 2>/dev/null || printf '%s' "$STALE_ARRAY")
 fi
 COVERAGE_ARRAY=$(jq -s '.' "$TMPDIR/coverage_gaps.jsonl" 2>/dev/null || echo "[]")
+if [ -s "$CARRY_COVERAGE" ]; then
+  CARRY_COV_ARRAY=$(jq -s '.' "$CARRY_COVERAGE" 2>/dev/null || echo "[]")
+  COVERAGE_ARRAY=$(jq -n --argjson a "$COVERAGE_ARRAY" --argjson b "$CARRY_COV_ARRAY" '$a + $b' 2>/dev/null || printf '%s' "$COVERAGE_ARRAY")
+fi
 ECO_SUMMARY=$(jq -s 'group_by(.ecosystem) | map({key: .[0].ecosystem, value: length}) | from_entries' \
   "$TMPDIR/all_prs.jsonl" 2>/dev/null || echo "{}")
 
