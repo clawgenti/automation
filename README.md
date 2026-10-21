@@ -39,7 +39,7 @@ bash scripts/repoman-run.sh <program> owner/name [owner/name ...]
 bash scripts/repoman-run.sh <program> --dry-run
 ```
 
-`<program>` is one of `link-health`, `dep-bump`, `pr-review`, `weekly-report`, `automation-health`. The orchestrator resolves the repo set, runs the capability check and clone refresh the program needs, execs it, and writes its `_index.json` entry — it is the **sole writer of `_index.json`**, so a program run directly (the commands in the table above) no longer updates the registry the dashboard reads. `repoman run <program>` is the blessed path for an indexed run.
+`<program>` is one of `link-health`, `dep-bump`, `pr-review`, `weekly-report`, `automation-health`, `repo-sync` (the full set is whatever `repoman-run.sh --help` lists). The orchestrator resolves the repo set, runs the capability check and clone refresh the program needs, execs it, and writes its `_index.json` entry — it is the **sole writer of `_index.json`**, so a program run directly (the commands in the table above) no longer updates the registry the dashboard reads. `repoman run <program>` is the blessed path for an indexed run.
 
 There is no `repoman` executable in this repo yet; `repoman run <program>` maps to `bash scripts/repoman-run.sh <program>`. In a RepoMan deployment the `/repoman` skill (in `rossoctl/agent-skills`) performs that mapping from a Claude Code / OpenClaw agent; scheduled DAM/OpenClaw jobs invoke the same command string. Standing-orders that still call scanners directly are tracked for migration in [#118](https://github.com/rossoctl/automation/issues/118). See the run-path design in `docs/specs/` and the epic [#72](https://github.com/rossoctl/automation/issues/72).
 

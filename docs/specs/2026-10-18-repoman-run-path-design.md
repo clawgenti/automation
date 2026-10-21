@@ -144,7 +144,7 @@ program is runnable via `repoman run`); the two lists are kept in sync until
 fields to decide steps and to write the index entry; a program never
 self-registers. This table is the natural future home for the unified program
 registry (#76); for now it must stay consistent with the `KNOWN_PROGRAMS`
-allowlist in `repoman-setup.sh:34`. Unifying the two lists is #76's job, not
+allowlist in `repoman-setup.sh`. Unifying the two lists is #76's job, not
 this spec's — we deliberately avoid entrenching a conflicting third registry.
 
 ## Data flow
@@ -159,7 +159,7 @@ run to a named subset without touching any scanner:
 
 ```
 ~/.repoman/repos.json          (authoritative; written only at setup/enroll time
-   [eventing-lab, context-service]  via repoman-setup.sh, never during a run)
+   [owner-a/repo-1, owner-b/repo-2]  via repoman-setup.sh, never during a run)
         │  run path reads the skill-reconciled target list
         ▼
    project to subset  ->  "$(mktemp -d)/repos.json"   [in $TMPDIR, NOT under ~/.repoman/]
@@ -181,9 +181,9 @@ run to a named subset without touching any scanner:
   resolves a bare name via `repoman_match_name` and **fails loud on an ambiguous
   bare name** — one enrolled under ≥2 owners — rather than silently broadening
   the run to all of them; duplicate targets are deduped. It does not perform
-  org-expansion or any other reconciliation the skill owns. (Updated after
-  bb5dfb0; supersedes the earlier "trusts the list and does not re-interpret it"
-  wording.)
+  org-expansion or any other reconciliation the skill owns. (Updated in
+  [bb5dfb0](https://github.com/rossoctl/automation/commit/bb5dfb05f26d84cd2a633e6c74cfbbcba9fa0706);
+  supersedes the earlier "trusts the list and does not re-interpret it" wording.)
 
 **Writer invariant:** the temp file is a throwaway projection in `$TMPDIR`, so
 writing it directly does **not** violate the HARD INVARIANT (which guards only
@@ -240,13 +240,35 @@ written state to the **repos it actually scanned this run**:
    recoveries (e.g. re-running one repo after a transient outage); their
    issues-created/closed counts are intentionally *not* recorded to history, in
    exchange for keeping the trend series honest and the system simple.
+5. **Recompute scalar totals over the merged set.** `latest.json` carries
+   per-repo lists forward (step 3), so its scalar totals must match: a subset
+   run must not leave whole-set lists beside subset-only counts
+   (`repos_scanned`, `total_open_prs`, `repos_with_dependabot`,
+   `total_links_checked`, `ecosystem_summary`, …). Otherwise the dashboard,
+   which derives ratios like SLA compliance `(total_open_prs - stale)/total_open_prs`
+   and coverage `repos_with_dependabot/repos_scanned`, computes nonsense (e.g. a
+   negative compliance rate). The scanner recomputes these totals over the
+   merged (scanned ∪ carried) set it actually writes.
+
+**Dry-run writes nothing to the baseline (REVISED — PR #117 round 2).** A
+`--dry-run` run must **not** write `latest.json` or append `history.json` — only
+preview. The scanners originally gated issue create/close and the push on
+`DRY_RUN` but called `write_report_latest`/`append_history_row` unconditionally,
+so a dry run silently overwrote the baseline: the next real run then saw the
+dry-run's findings as *recurring* (not *new*) and skipped filing them, and saw
+nothing to close. `pr-review-scanner.sh` already gates all of
+`latest.json`/`state.json`/`history.json` on dry-run; link-health and dep-bump
+must do the same. (This is why the documented "safe preview" claim must hold:
+`repoman run <program> --dry-run` is side-effect-free.)
 
 A whole-set run (no targets) is unchanged: scanned set == enrolled set, the
-carry-forward merge is a no-op, and history is appended as before.
+carry-forward merge is a no-op, totals are the whole-set counts, and history is
+appended as before. All three stateful scanners (link-health, dep-bump,
+pr-review) implement the full contract — steps 1-5 plus dry-run suppression.
 
 This revises the earlier "scanners stay unchanged" boundary: the env-scoped temp
 file remains the selection mechanism, but the three stateful scanners gain
-subset-awareness in their diff + write + history steps.
+subset-awareness in their diff + write + totals + history + dry-run steps.
 
 ### Output routing
 
@@ -351,12 +373,14 @@ Non-interactive, fail-loud, legible to cron/standing-order wrappers.
 Captured because it shapes future RepoMan work and is why fixers are out of
 scope.
 
-- **Current mechanism:** `link-health-fixer.sh:25-29` hardcodes one identity
-  (`Gloire Rubambiza <gloire@ibm.com>`) and sets author = committer; line 500
-  commits with `git commit -s`, so the DCO `Signed-off-by` trailer is derived
-  from that committer identity. **Author = committer = DCO signer, all one
-  hardcoded identity. No split exists today.** The same shape produces the
-  dashboard's auto-PRs (e.g. [#111](https://github.com/rossoctl/automation/pull/111)).
+- **Current mechanism:** `link-health-fixer.sh` hardcodes one identity and sets
+  author = committer ([the identity block](https://github.com/rossoctl/automation/blob/954096ae7adc5a1f6ca9eadc1b24b035cc252687/scripts/link-health-fixer.sh#L25-L29)),
+  then [commits with `git commit -s`](https://github.com/rossoctl/automation/blob/954096ae7adc5a1f6ca9eadc1b24b035cc252687/scripts/link-health-fixer.sh#L500),
+  so the DCO `Signed-off-by` trailer is derived from that committer identity.
+  **Author = committer = DCO signer, all one hardcoded identity. No split exists
+  today.** The same shape produces the dashboard's auto-PRs (e.g.
+  [#111](https://github.com/rossoctl/automation/pull/111)). (Blob links pinned to
+  `954096a`; lines drift once the file is edited.)
 - **The real question (surfaced during run-path design):** when automation
   commits/opens PRs, three roles can diverge — **author** (who wrote the
   change), **committer** (what ran it; could be a bot/GitHub App), and **DCO
@@ -410,14 +434,14 @@ leans on the capability gate).
 
 ## Deferred work (filed/to-file, referenced here for a clean boundary)
 
-- **De-rossoctl-ing issue (to file):** remove the hardcoded org/person defaults
-  — `REPORT_TARGET_REPO` (`link-health-scanner.sh:45`,
-  `automation-health-dashboard.sh:82`), `SOURCE_REPO`
-  (`automation-health-dashboard.sh:83`), committer identity
-  (`link-health-fixer.sh:25-26`), and the personal `REPORT_PY` default
-  (`weekly-report.sh:79`, already env-overridable). 4 behavioral constants
-  across 3 files. Distinct from #99 (that is config *plumbing*; this is embedded
-  org/person *defaults*).
+- **De-rossoctl-ing ([#116](https://github.com/rossoctl/automation/issues/116)):**
+  remove the hardcoded org/person defaults — `REPORT_TARGET_REPO` and
+  `SOURCE_REPO` in `link-health-scanner.sh` / `automation-health-dashboard.sh`,
+  the committer identity in `link-health-fixer.sh`, and the personal `REPORT_PY`
+  default in `weekly-report.sh` (already env-overridable). 4 behavioral
+  constants across 3 files. #116 carries the authoritative per-line locations;
+  distinct from #99 (that is config *plumbing*; this is embedded org/person
+  *defaults*).
 - **#99** — scanner/fixer/dashboard param-driven decoupling (v0.1.1).
 - **#82** — automation commit/sign-off identity (gates fixer orchestration).
 - **#76** — unify program registry.
