@@ -241,6 +241,14 @@ REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" REPOMAN_PROGRAMS_DIR="$PRO
   bash "$RUN" pr-review >/dev/null 2>&1
 grep -q "^index " "$TEST_TMPDIR/calls" && { echo "FAIL index-write: pr-review should not be indexed"; fail=1; }
 
+# link-health --dry-run -> index NOT written (a dry run writes no latest.json,
+# so registering it would point the dashboard at a nonexistent report).
+: > "$TEST_TMPDIR/calls"
+RUN_STUB_CHECK_RC=0 RUN_STUB_SYNC_RC=0 REPOMAN_RUN_BIN="$STUB_DIR" REPOMAN_REPOS_FILE="$FIX" \
+  REPOMAN_PROGRAMS_DIR="$PROGDIR" REPOMAN_INDEX_FILE="$TEST_TMPDIR/_index.json" \
+  bash "$RUN" link-health --dry-run >/dev/null 2>&1
+grep -q "^index " "$TEST_TMPDIR/calls" && { echo "FAIL dry-run-index: link-health --dry-run wrote an index entry"; fail=1; }
+
 # ---------------------------------------------------------------------------
 # Task 7: total clone-sync failure is fatal (partial is handled inside repo-sync)
 # ---------------------------------------------------------------------------

@@ -281,13 +281,13 @@ main() {
     echo "ERROR: $program exec failed" >&2; return 1
   fi
 
-  # Register in the index (sole writer). Only for programs with the shape.
-  # The index must name where reports ACTUALLY landed: the scanner writes to
-  # ${REPORTS_DIR:-<program default>}, so honor a REPORTS_DIR override here too,
-  # falling back to the table's default. Otherwise the dashboard (which reads
-  # report_path to find latest.json) would look in the wrong place whenever
-  # REPORTS_DIR is set.
-  if [ "$writes_index" = "yes" ]; then
+  # Register in the index (sole writer). Only for programs with the shape, and
+  # NOT on a dry run: a dry run writes no latest.json, so registering it would
+  # point the dashboard at a report that does not exist (it would then error
+  # "No program reports found"). The index must name where reports ACTUALLY
+  # landed: the scanner writes to ${REPORTS_DIR:-<program default>}, so honor a
+  # REPORTS_DIR override here too, falling back to the table's default.
+  if [ "$writes_index" = "yes" ] && ! "$dry_run"; then
     local effective_report_path="${REPORTS_DIR:-$report_path}"
     _write_index "$program" "$display_name" "$effective_report_path"
   fi
