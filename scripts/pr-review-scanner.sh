@@ -349,12 +349,29 @@ else
   # narrowed run, merge the prior latest.json's eligible_prs for UNSCANNED repos
   # back in, so the fixer's queue (which reads .eligible_prs) is not truncated to
   # just the scanned repos.
+  #
+  # BUT the carried set is a stale snapshot: a PR the fixer has since reviewed
+  # (now in state.reviewed / in_progress, PR still open) would be re-listed as
+  # eligible, and `pr-review-fixer.sh begin` re-queues every eligible entry
+  # unconditionally -> a duplicate review of an unchanged PR. So filter the
+  # carried set against the CURRENT state ($TMPDIR/state.json, already loaded and
+  # evicted this run): drop any carried entry whose repo/number is in
+  # reviewed/in_progress at the SAME head_sha (mirrors the per-candidate skip at
+  # the review step). A head_sha change means the PR moved on and is legitimately
+  # eligible again, so it is kept.
   if [ -n "${REPOMAN_SUBSET_REPOS:-}" ] && [ -f "$REPORTS_DIR/latest.json" ]; then
     SCANNED_JSON=$(printf '%s\n' "$REPOMAN_SUBSET_REPOS" \
       | jq -R 'select(length>0)' | jq -s '.' 2>/dev/null || echo '[]')
-    CARRY_ELIGIBLE=$(jq -c --argjson scanned "$SCANNED_JSON" \
-      '[.eligible_prs[]? | select(.repo as $r | ($scanned | index($r)) | not)]' \
-      "$REPORTS_DIR/latest.json" 2>/dev/null || echo '[]')
+    # "handled" = {repo, number, head_sha} already reviewed/in_progress now.
+    HANDLED_JSON=$(jq -c '[(.reviewed[]?, .in_progress[]?) | {repo, number, head_sha}]' \
+      "$TMPDIR/state.json" 2>/dev/null || echo '[]')
+    CARRY_ELIGIBLE=$(jq -c --argjson scanned "$SCANNED_JSON" --argjson handled "$HANDLED_JSON" '
+      [ .eligible_prs[]?
+        | select(.repo as $r | ($scanned | index($r)) | not)             # unscanned only
+        | select( . as $e
+            | ($handled | any(.repo == $e.repo and .number == $e.number
+                               and .head_sha == $e.head_sha)) | not ) ]   # not already handled at this SHA
+      ' "$REPORTS_DIR/latest.json" 2>/dev/null || echo '[]')
     LATEST_JSON=$(printf '%s' "$LATEST_JSON" \
       | jq -c --argjson carry "$CARRY_ELIGIBLE" '.eligible_prs += $carry' 2>/dev/null || printf '%s' "$LATEST_JSON")
   fi

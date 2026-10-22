@@ -42,11 +42,14 @@ cat > "$REPORTS/state.json" <<JSON
 {"in_progress":[{"repo":"bob/b","number":7,"head_sha":"abc","started_at":"$NOW"}],
  "reviewed":[{"repo":"bob/b","number":9,"head_sha":"def","reviewed_at":"$NOW"}]}
 JSON
-# Prior latest.json: an eligible PR in bob/b (out of subset) that must be carried
-# forward; a prior history with 1 row so the skip-on-subset is observable.
+# Prior latest.json eligible_prs (all in bob/b, out of the alice/a subset):
+#  - #11: genuinely eligible, not in state -> MUST be carried forward (step 3).
+#  - #9 @head_sha def: already in state.reviewed at the SAME head_sha -> MUST be
+#    dropped (C1: carrying it would make the fixer re-review an unchanged PR).
 cat > "$REPORTS/latest.json" <<JSON
 {"scan_id":"prev-1","date":"2026-10-01T00:00:00Z","repos_scanned":2,
- "candidates_found":1,"eligible_prs":[{"repo":"bob/b","number":11}]}
+ "candidates_found":2,"eligible_prs":[{"repo":"bob/b","number":11,"head_sha":"zzz"},
+   {"repo":"bob/b","number":9,"head_sha":"def"}]}
 JSON
 printf '[{"scan_id":"prev-1","eligible":1}]\n' > "$REPORTS/history.json"
 
@@ -72,12 +75,21 @@ else
   echo "FAIL: bob/b reviewed entry evicted on subset run (count=$rv)"; fail=1
 fi
 
-# Step 3: bob/b's eligible PR (out of subset) carried forward into latest.json.
-elig=$(jq -r '[.eligible_prs[] | select(.repo=="bob/b")] | length' "$REPORTS/latest.json" 2>/dev/null)
-if [ "$elig" = "1" ]; then
-  echo "PASS: bob/b eligible_pr carried forward into latest.json"
+# Step 3: the genuinely-eligible out-of-subset PR (#11) is carried forward.
+has11=$(jq -r '[.eligible_prs[] | select(.repo=="bob/b" and .number==11)] | length' "$REPORTS/latest.json" 2>/dev/null)
+if [ "$has11" = "1" ]; then
+  echo "PASS: bob/b#11 (eligible, unhandled) carried forward"
 else
-  echo "FAIL: bob/b eligible_pr not carried forward (count=$elig):"; jq -c '.eligible_prs' "$REPORTS/latest.json" 2>/dev/null; fail=1
+  echo "FAIL: bob/b#11 not carried forward (count=$has11):"; jq -c '.eligible_prs' "$REPORTS/latest.json" 2>/dev/null; fail=1
+fi
+
+# C1: the already-reviewed PR (#9, in state.reviewed at same head_sha) is DROPPED
+# from the carried set, so the fixer won't re-review an unchanged PR.
+has9=$(jq -r '[.eligible_prs[] | select(.repo=="bob/b" and .number==9)] | length' "$REPORTS/latest.json" 2>/dev/null)
+if [ "$has9" = "0" ]; then
+  echo "PASS: bob/b#9 (already reviewed at same head_sha) dropped from carried set"
+else
+  echo "FAIL: bob/b#9 wrongly carried forward -> would cause a duplicate review"; jq -c '.eligible_prs' "$REPORTS/latest.json" 2>/dev/null; fail=1
 fi
 
 # Step 4: history.json not appended on a subset run (still 1 row).
