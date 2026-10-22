@@ -159,11 +159,35 @@ echo "Repos scanned: $REPOS_SCANNED (failed: $REPOS_FAILED)"
 echo "Total links: $TOTAL_LINKS, Total errors: $TOTAL_ERRORS"
 
 # --- Load previous scan for diffing ---
+# Subset-run carry-forward (see docs/specs run-path, "Subset-aware stateful
+# scanners"): when REPOMAN_SUBSET_REPOS is set, this run scanned only those
+# repos. The diff must compare like-for-like, so the previous report is split
+# into the findings for SCANNED repos (which participate in the diff) and the
+# findings for UNSCANNED repos (carried forward verbatim into latest.json,
+# never diffed, so their issues are never mis-closed as "fixed").
+ALL_PREV_BROKEN="$TMPDIR/all_prev_broken.jsonl"
 PREV_BROKEN="$TMPDIR/prev_broken.jsonl"
+CARRY_BROKEN="$TMPDIR/carry_broken.jsonl"
+: > "$CARRY_BROKEN"
 if [ -f "$REPORTS_DIR/latest.json" ]; then
-  jq -c '.broken[]?' "$REPORTS_DIR/latest.json" > "$PREV_BROKEN" 2>/dev/null || true
+  jq -c '.broken[]?' "$REPORTS_DIR/latest.json" > "$ALL_PREV_BROKEN" 2>/dev/null || true
 else
-  : > "$PREV_BROKEN"
+  : > "$ALL_PREV_BROKEN"
+fi
+if [ -n "${REPOMAN_SUBSET_REPOS:-}" ]; then
+  # Build a JSON array of the scanned owner/name slugs once, pass via --argjson.
+  SCANNED_JSON=$(printf '%s\n' "$REPOMAN_SUBSET_REPOS" \
+    | jq -R 'select(length>0)' | jq -s '.' 2>/dev/null || echo '[]')
+  # prev findings whose .repo IS in the scanned set -> participate in the diff
+  jq -c --argjson scanned "$SCANNED_JSON" \
+    'select(.repo as $r | $scanned | index($r))' \
+    "$ALL_PREV_BROKEN" > "$PREV_BROKEN" 2>/dev/null || : > "$PREV_BROKEN"
+  # prev findings whose .repo is NOT in the scanned set -> carried forward
+  jq -c --argjson scanned "$SCANNED_JSON" \
+    'select(.repo as $r | ($scanned | index($r)) | not)' \
+    "$ALL_PREV_BROKEN" > "$CARRY_BROKEN" 2>/dev/null || : > "$CARRY_BROKEN"
+else
+  cp "$ALL_PREV_BROKEN" "$PREV_BROKEN"
 fi
 
 # --- Compute diff using shared library ---
@@ -314,6 +338,10 @@ done < "$TMPDIR/fixed_keys.txt"
 echo "Issues closed: $ISSUES_CLOSED"
 
 # --- Write latest.json ---
+# Fresh findings for the scanned repos get the standard enrichment. On a subset
+# run, the previous findings for UNSCANNED repos are carried forward verbatim
+# (they already carry issue_number/first_detected from the prior report), so the
+# baseline stays whole and the next full run diffs against a complete picture.
 BROKEN_ARRAY=$(jq -s '
   [.[] | . + {
     issue_number: null,
@@ -321,6 +349,19 @@ BROKEN_ARRAY=$(jq -s '
     context: ""
   }]
 ' "$TMPDIR/broken.jsonl" 2>/dev/null || echo "[]")
+if [ -s "$CARRY_BROKEN" ]; then
+  CARRY_ARRAY=$(jq -s '.' "$CARRY_BROKEN" 2>/dev/null || echo "[]")
+  BROKEN_ARRAY=$(jq -n --argjson a "$BROKEN_ARRAY" --argjson b "$CARRY_ARRAY" '$a + $b' 2>/dev/null || printf '%s' "$BROKEN_ARRAY")
+fi
+
+# On a subset run the broken[] list is whole-set (carried forward), so keep the
+# prior report's whole-set scalar totals rather than the subset-only counts, or
+# the dashboard would read a subset repos_scanned/total_links_checked beside a
+# whole-set broken[]. Per-run delta (new/fixed/recurring) still reflects this run.
+if [ -n "${REPOMAN_SUBSET_REPOS:-}" ] && [ -f "$REPORTS_DIR/latest.json" ]; then
+  REPOS_SCANNED=$(jq -r '.repos_scanned // '"$REPOS_SCANNED" "$REPORTS_DIR/latest.json" 2>/dev/null || echo "$REPOS_SCANNED")
+  TOTAL_LINKS=$(jq -r '.total_links_checked // '"$TOTAL_LINKS" "$REPORTS_DIR/latest.json" 2>/dev/null || echo "$TOTAL_LINKS")
+fi
 
 LATEST_JSON=$(cat << LATEST_EOF
 {
@@ -341,8 +382,15 @@ LATEST_JSON=$(cat << LATEST_EOF
 LATEST_EOF
 )
 
-write_report_latest "$REPORTS_DIR" "$LATEST_JSON"
-echo "Wrote latest.json"
+# A dry run must NOT write the baseline: overwriting latest.json would make the
+# next real run see these findings as "recurring" (not "new") and skip filing
+# them, and skip closing anything shown as fixed here. Preview only.
+if [ "$DRY_RUN" = true ]; then
+  echo "[DRY RUN] Would write latest.json (baseline left unchanged)"
+else
+  write_report_latest "$REPORTS_DIR" "$LATEST_JSON"
+  echo "Wrote latest.json"
+fi
 
 # --- Append to history.json ---
 HISTORY_ROW=$(cat << HIST_EOF
@@ -361,22 +409,25 @@ HISTORY_ROW=$(cat << HIST_EOF
 HIST_EOF
 )
 
-append_history_row "$REPORTS_DIR" "$HISTORY_ROW" "$MAX_HISTORY_ROWS"
-echo "Appended to history.json"
-
-# --- Register in the program registry (Phase 5) ---
-# The index lives beside the program report dirs (parent of REPORTS_DIR);
-# REPOMAN_INDEX_FILE overrides for tests/dogfood. A failed index write must
-# NOT fail an otherwise successful scan (the reports are the primary
-# product) -- but it is logged, not swallowed silently.
-index_file="${REPOMAN_INDEX_FILE:-$(dirname "$REPORTS_DIR")/_index.json}"
-if ! "$SCRIPT_DIR/repoman-index.sh" \
-      --index "$index_file" \
-      --program link-health \
-      --display-name "Link Health" \
-      --report-path "$REPORTS_DIR"; then
-  echo "WARNING: failed to update program registry at $index_file (scan reports were still written)" >&2
+# history.json is a full-set trend series (consumed by the dashboard). A subset
+# run is a rare manual recovery over part of the enrolled set; appending its
+# partial counts would distort the trend, so we skip the history append on a
+# subset run. (Trade-off: that run's issues-created/closed counts are not
+# recorded to history — accepted; see docs/specs run-path, "Subset-aware
+# stateful scanners".)
+if [ "$DRY_RUN" = true ]; then
+  echo "[DRY RUN] Would append history.json row (skipped)"
+elif [ -n "${REPOMAN_SUBSET_REPOS:-}" ]; then
+  echo "Subset run — skipping history.json append (trend series stays full-set)"
+else
+  append_history_row "$REPORTS_DIR" "$HISTORY_ROW" "$MAX_HISTORY_ROWS"
+  echo "Appended to history.json"
 fi
+
+# Note: _index.json registration is performed by the run-path orchestrator
+# (scripts/repoman-run.sh), the sole index writer — not here. Running this
+# scanner directly no longer updates the registry; `repoman run link-health`
+# is the blessed path for an indexed run. (Run path: issue #107, epic #72.)
 
 # --- Update docs/link-health.md ---
 # Build trend table from last 10 history entries (deduplicate same-day rows)

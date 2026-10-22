@@ -154,6 +154,25 @@ jq -r '"\(.repo):\(.number)"' "$TMPDIR/open_labeled.jsonl" 2>/dev/null \
 
 touch "$TMPDIR/evict_keys.txt"
 
+# Subset-run guard (see docs/specs run-path, "Subset-aware stateful scanners"):
+# on a narrowed run, open_keys.txt only covers the SCANNED repos, so an entry
+# from an UNSCANNED repo would wrongly look "no longer open/labeled" and be
+# evicted — discarding another repo's in-progress/reviewed claim. Scope the
+# open/labeled eviction to scanned repos; an unscanned entry is carried forward.
+# (TTL/stale checks below are time-based and still apply to all entries.)
+SCANNED_REPOS_FILE="$TMPDIR/scanned_repos.txt"
+if [ -n "${REPOMAN_SUBSET_REPOS:-}" ]; then
+  printf '%s\n' "$REPOMAN_SUBSET_REPOS" | grep . > "$SCANNED_REPOS_FILE" || true
+else
+  : > "$SCANNED_REPOS_FILE"   # empty => whole-set run => all repos are "scanned"
+fi
+# _repo_scanned <owner/name> -> 0 if this run scanned that repo (whole-set runs
+# scan every repo, so an empty scanned file means "yes").
+_repo_scanned() {
+  [ -s "$SCANNED_REPOS_FILE" ] || return 0
+  grep -qxF "$1" "$SCANNED_REPOS_FILE"
+}
+
 # Write state entries to temp files so we can iterate without piping into while
 jq -c '.reviewed[]?' "$TMPDIR/state.json" > "$TMPDIR/reviewed_entries.jsonl" 2>/dev/null || true
 jq -c '.in_progress[]?' "$TMPDIR/state.json" > "$TMPDIR/in_progress_entries.jsonl" 2>/dev/null || true
@@ -168,8 +187,10 @@ while IFS= read -r entry; do
   evict=false
   reason=""
 
-  # Not in open+labeled set (closed, merged, or label removed)
-  if ! grep -qF "$key" "$TMPDIR/open_keys.txt"; then
+  # Not in open+labeled set (closed, merged, or label removed) — but only
+  # meaningful for a repo this run actually scanned; an unscanned repo's entry
+  # is carried forward, not evicted.
+  if _repo_scanned "$repo" && ! grep -qF "$key" "$TMPDIR/open_keys.txt"; then
     evict=true
     reason="no longer open/labeled"
   fi
@@ -200,8 +221,8 @@ while IFS= read -r entry; do
   evict=false
   reason=""
 
-  # Not in open+labeled set
-  if ! grep -qF "$key" "$TMPDIR/open_keys.txt"; then
+  # Not in open+labeled set — scoped to scanned repos (see reviewed loop above).
+  if _repo_scanned "$repo" && ! grep -qF "$key" "$TMPDIR/open_keys.txt"; then
     evict=true
     reason="no longer open/labeled"
   fi
@@ -324,6 +345,37 @@ else
     --argjson eligible_prs "$(cat "$QUEUE_FILE")" \
     '{scan_id: $scan_id, date: $date, repos_scanned: $repos_scanned, candidates_found: $candidates_found, eligible_prs: $eligible_prs}')
 
+  # Subset carry-forward (steps 3/4 of the run-path spec's contract): on a
+  # narrowed run, merge the prior latest.json's eligible_prs for UNSCANNED repos
+  # back in, so the fixer's queue (which reads .eligible_prs) is not truncated to
+  # just the scanned repos.
+  #
+  # BUT the carried set is a stale snapshot: a PR the fixer has since reviewed
+  # (now in state.reviewed / in_progress, PR still open) would be re-listed as
+  # eligible, and `pr-review-fixer.sh begin` re-queues every eligible entry
+  # unconditionally -> a duplicate review of an unchanged PR. So filter the
+  # carried set against the CURRENT state ($TMPDIR/state.json, already loaded and
+  # evicted this run): drop any carried entry whose repo/number is in
+  # reviewed/in_progress at the SAME head_sha (mirrors the per-candidate skip at
+  # the review step). A head_sha change means the PR moved on and is legitimately
+  # eligible again, so it is kept.
+  if [ -n "${REPOMAN_SUBSET_REPOS:-}" ] && [ -f "$REPORTS_DIR/latest.json" ]; then
+    SCANNED_JSON=$(printf '%s\n' "$REPOMAN_SUBSET_REPOS" \
+      | jq -R 'select(length>0)' | jq -s '.' 2>/dev/null || echo '[]')
+    # "handled" = {repo, number, head_sha} already reviewed/in_progress now.
+    HANDLED_JSON=$(jq -c '[(.reviewed[]?, .in_progress[]?) | {repo, number, head_sha}]' \
+      "$TMPDIR/state.json" 2>/dev/null || echo '[]')
+    CARRY_ELIGIBLE=$(jq -c --argjson scanned "$SCANNED_JSON" --argjson handled "$HANDLED_JSON" '
+      [ .eligible_prs[]?
+        | select(.repo as $r | ($scanned | index($r)) | not)             # unscanned only
+        | select( . as $e
+            | ($handled | any(.repo == $e.repo and .number == $e.number
+                               and .head_sha == $e.head_sha)) | not ) ]   # not already handled at this SHA
+      ' "$REPORTS_DIR/latest.json" 2>/dev/null || echo '[]')
+    LATEST_JSON=$(printf '%s' "$LATEST_JSON" \
+      | jq -c --argjson carry "$CARRY_ELIGIBLE" '.eligible_prs += $carry' 2>/dev/null || printf '%s' "$LATEST_JSON")
+  fi
+
   write_report_latest "$REPORTS_DIR" "$LATEST_JSON"
   [ "$VERBOSE" = true ] && echo "Wrote $REPORTS_DIR/latest.json" >&2
 
@@ -331,19 +383,23 @@ else
   pr_review_state_write "$TMPDIR/state.json" "$REPORTS_DIR/state.json" "pr-review-scanner"
   [ "$VERBOSE" = true ] && echo "Wrote $REPORTS_DIR/state.json" >&2
 
-  # history.json
-  HISTORY_ROW=$(jq -n \
-    --arg scan_id "$SCAN_ID" \
-    --arg date "$SCAN_TIME" \
-    --argjson repos_scanned "$REPOS_SCANNED" \
-    --argjson eligible "$ELIGIBLE" \
-    --argjson skipped_in_progress "$SKIPPED_IN_PROGRESS" \
-    --argjson skipped_reviewed "$SKIPPED_REVIEWED" \
-    --argjson evicted "$EVICTED" \
-    '{scan_id: $scan_id, date: $date, repos_scanned: $repos_scanned, eligible: $eligible, skipped_in_progress: $skipped_in_progress, skipped_reviewed: $skipped_reviewed, evicted: $evicted}')
+  # history.json — skip on a subset run (full-set trend series; see run-path spec).
+  if [ -n "${REPOMAN_SUBSET_REPOS:-}" ]; then
+    [ "$VERBOSE" = true ] && echo "Subset run — skipping history.json append" >&2
+  else
+    HISTORY_ROW=$(jq -n \
+      --arg scan_id "$SCAN_ID" \
+      --arg date "$SCAN_TIME" \
+      --argjson repos_scanned "$REPOS_SCANNED" \
+      --argjson eligible "$ELIGIBLE" \
+      --argjson skipped_in_progress "$SKIPPED_IN_PROGRESS" \
+      --argjson skipped_reviewed "$SKIPPED_REVIEWED" \
+      --argjson evicted "$EVICTED" \
+      '{scan_id: $scan_id, date: $date, repos_scanned: $repos_scanned, eligible: $eligible, skipped_in_progress: $skipped_in_progress, skipped_reviewed: $skipped_reviewed, evicted: $evicted}')
 
-  append_history_row "$REPORTS_DIR" "$HISTORY_ROW" "$MAX_HISTORY_ROWS"
-  [ "$VERBOSE" = true ] && echo "Appended to $REPORTS_DIR/history.json" >&2
+    append_history_row "$REPORTS_DIR" "$HISTORY_ROW" "$MAX_HISTORY_ROWS"
+    [ "$VERBOSE" = true ] && echo "Appended to $REPORTS_DIR/history.json" >&2
+  fi
 fi
 
 # --- Output (backward compatible) ---

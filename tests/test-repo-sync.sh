@@ -247,4 +247,13 @@ out=$(GIT_STUB_CLONE_FAIL_FOR="tool" run_sync 2>&1); rc=$?
 printf '%s' "$out" | grep -q "failed 1" || { echo "FAIL c16: not 'failed 1'"; fail=1; }
 printf '%s' "$out" | grep -q "cloned 1" || { echo "FAIL c16: not 'cloned 1'"; fail=1; }
 
+# Case 17: --dry-run is side-effect-free -- previews would-clone/would-pull and
+# invokes git NEITHER for clone NOR pull (the whole point of the preview).
+: > "$CALL_LOG"; rm -rf "$REPOS_ROOT"
+out=$(run_sync --dry-run 2>&1); rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL c17: --dry-run should exit 0, got $rc"; fail=1; }
+printf '%s' "$out" | grep -q "\[DRY RUN\] would clone" || { echo "FAIL c17: no would-clone preview"; fail=1; }
+grep -qE "^clone |pull" "$CALL_LOG" && { echo "FAIL c17: --dry-run invoked git (clone/pull): $(cat "$CALL_LOG")"; fail=1; }
+[ ! -d "$REPOS_ROOT/alice/tool/.git" ] || { echo "FAIL c17: --dry-run created a clone on disk"; fail=1; }
+
 exit "$fail"

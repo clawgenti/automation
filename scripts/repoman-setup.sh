@@ -31,7 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # user who introduces a new program must add its identifier here until the
 # program registry (_index.json, tracked in #76) replaces it with a
 # discovered list.
-KNOWN_PROGRAMS="link-health dep-bump pr-review automation-health repo-sync"
+KNOWN_PROGRAMS="link-health dep-bump pr-review automation-health repo-sync weekly-report"
 
 usage() {
   cat <<'EOF'
@@ -51,7 +51,7 @@ Subcommands:
   enable-program --program <name>
       Merge {"enabled": true} into programs/<name>.json.
       Known programs: link-health, dep-bump, pr-review, automation-health,
-      repo-sync.
+      repo-sync, weekly-report.
 
   set-output --program <name> --mode same|central [--repo <owner/name>]
       Merge {"output_repo": {...}} into programs/<name>.json.
@@ -320,8 +320,8 @@ Usage: repoman-setup.sh enable-program --program <name>
 
 Merge {"enabled": true} into programs/<name>.json, overridable via
 REPOMAN_PROGRAMS_DIR. <name> is checked against a known-program allowlist
-(link-health, dep-bump, pr-review, automation-health, repo-sync) so a typo
-cannot create a stray file. Creates the programs/ dir if absent. This is a
+(link-health, dep-bump, pr-review, automation-health, repo-sync,
+weekly-report) so a typo cannot create a stray file. Creates the programs/ dir if absent. This is a
 JSON merge, not an overwrite: existing keys (e.g. output_repo) survive.
 EOF
     return 0

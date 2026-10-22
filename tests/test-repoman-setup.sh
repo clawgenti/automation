@@ -294,6 +294,15 @@ enabled=$(jq -r '.enabled' "$PROGRAMS_DIR/link-health.json")
 [ "$enabled" = "true" ] \
   || { echo "FAIL enable-program: .enabled got [$enabled]"; fail=1; }
 
+# --- every run-path program is enrollable (allowlist completeness) ---
+# weekly-report is a run-path program (repoman run weekly-report); it must be in
+# KNOWN_PROGRAMS so its programs/<name>.json can be created on a fresh install.
+rm -rf "$PROGRAMS_DIR"
+REPOMAN_PROGRAMS_DIR="$PROGRAMS_DIR" bash "$SETUP" enable-program --program weekly-report \
+  || { echo "FAIL enable-program should accept weekly-report (must be in KNOWN_PROGRAMS)"; fail=1; }
+[ -f "$PROGRAMS_DIR/weekly-report.json" ] \
+  || { echo "FAIL enable-program should create weekly-report.json"; fail=1; }
+
 # --- rejects unknown program name, writes nothing ---
 rm -rf "$PROGRAMS_DIR"
 if REPOMAN_PROGRAMS_DIR="$PROGRAMS_DIR" bash "$SETUP" enable-program --program lnik-health >/dev/null 2>&1; then
