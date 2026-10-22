@@ -166,6 +166,11 @@ echo ""
 echo "--- Listing Dependabot PRs ---"
 
 : > "$TMPDIR/all_prs.jsonl"
+# Per-repo open-PR breakdown ({repo, open_prs}) so a subset run can carry
+# unscanned repos' share of the population totals forward and recompute a
+# consistent whole-set total_open_prs/repos_with_dependabot (see the subset
+# totals block below). One line per repo with >=1 open Dependabot PR.
+: > "$TMPDIR/repo_pr_counts.jsonl"
 REPOS_WITH_DEPENDABOT=0
 TOTAL_OPEN_PRS=0
 
@@ -190,6 +195,8 @@ while IFS= read -r eco_record; do
 
   REPOS_WITH_DEPENDABOT=$((REPOS_WITH_DEPENDABOT + 1))
   TOTAL_OPEN_PRS=$((TOTAL_OPEN_PRS + pr_count))
+  jq -nc --arg repo "$full_repo" --argjson n "$pr_count" '{repo: $repo, open_prs: $n}' \
+    >> "$TMPDIR/repo_pr_counts.jsonl"
 
   # Try to get dependabot alerts for severity lookup (graceful failure)
   alerts_json="[]"
@@ -579,17 +586,32 @@ fi
 ECO_SUMMARY=$(jq -s 'group_by(.ecosystem) | map({key: .[0].ecosystem, value: length}) | from_entries' \
   "$TMPDIR/all_prs.jsonl" 2>/dev/null || echo "{}")
 
+# Per-repo open-PR counts this run scanned (whole-set on a normal run).
+REPO_PR_COUNTS=$(jq -s '.' "$TMPDIR/repo_pr_counts.jsonl" 2>/dev/null || echo "[]")
+
 # On a subset run the lists above are whole-set (carried forward), so the scalar
-# totals must be whole-set too, or the dashboard computes ratios across mixed
-# scopes (e.g. subset total_open_prs vs whole-set stale_prs -> negative SLA).
-# We cannot recompute per-repo raw counts for the unscanned repos (not stored),
-# so we keep the PRIOR report's whole-set scalars for the population totals and
-# let only the per-run delta (new/fixed) reflect this subset run. Falls back to
-# the freshly-computed subset values when there is no prior report.
+# population totals must be whole-set too, or the dashboard computes ratios
+# across mixed scopes (e.g. subset total_open_prs vs whole-set stale_prs ->
+# negative SLA). total_open_prs counts ALL open PRs, not just the stale ones in
+# the lists, so it can't be derived from stale_prs/coverage_gaps. Instead we keep
+# a per-repo open-PR breakdown (repo_pr_counts) and MERGE it: this run's counts
+# for scanned repos + the prior report's counts for unscanned repos. The
+# population totals are then recomputed from that merged breakdown, so they stay
+# exactly consistent with the carried-forward lists. Self-pruning: the breakdown
+# is rewritten each full run.
 if [ -n "${REPOMAN_SUBSET_REPOS:-}" ] && [ -f "$REPORTS_DIR/latest.json" ]; then
+  SCANNED_JSON=$(printf '%s\n' "$REPOMAN_SUBSET_REPOS" \
+    | jq -R 'select(length>0)' | jq -s '.' 2>/dev/null || echo '[]')
+  CARRY_PR_COUNTS=$(jq -c --argjson scanned "$SCANNED_JSON" \
+    '[.repo_pr_counts[]? | select(.repo as $r | ($scanned | index($r)) | not)]' \
+    "$REPORTS_DIR/latest.json" 2>/dev/null || echo '[]')
+  REPO_PR_COUNTS=$(jq -n --argjson a "$REPO_PR_COUNTS" --argjson b "$CARRY_PR_COUNTS" '$a + $b' 2>/dev/null || printf '%s' "$REPO_PR_COUNTS")
+  # recompute population totals from the merged per-repo breakdown
+  REPOS_WITH_DEPENDABOT=$(printf '%s' "$REPO_PR_COUNTS" | jq 'length')
+  TOTAL_OPEN_PRS=$(printf '%s' "$REPO_PR_COUNTS" | jq '[.[].open_prs] | add // 0')
+  # repos_scanned = distinct repos represented in the whole-set picture
   REPOS_SCANNED=$(jq -r '.repos_scanned // '"$REPOS_SCANNED" "$REPORTS_DIR/latest.json" 2>/dev/null || echo "$REPOS_SCANNED")
-  REPOS_WITH_DEPENDABOT=$(jq -r '.repos_with_dependabot // '"$REPOS_WITH_DEPENDABOT" "$REPORTS_DIR/latest.json" 2>/dev/null || echo "$REPOS_WITH_DEPENDABOT")
-  TOTAL_OPEN_PRS=$(jq -r '.total_open_prs // '"$TOTAL_OPEN_PRS" "$REPORTS_DIR/latest.json" 2>/dev/null || echo "$TOTAL_OPEN_PRS")
+  # ecosystem_summary is whole-set in the prior report; carry it (subset can't recompute)
   ECO_SUMMARY=$(jq -c '.ecosystem_summary // {}' "$REPORTS_DIR/latest.json" 2>/dev/null || echo "$ECO_SUMMARY")
 fi
 
@@ -603,6 +625,7 @@ LATEST_JSON=$(jq -nc \
   --argjson stale_prs "$STALE_ARRAY" \
   --argjson coverage_gaps "$COVERAGE_ARRAY" \
   --argjson ecosystem_summary "$ECO_SUMMARY" \
+  --argjson repo_pr_counts "$REPO_PR_COUNTS" \
   --argjson new_count "$NEW_STALE" \
   --argjson fixed_count "$FIXED_STALE" \
   --argjson recurring_count "$RECURRING_STALE" \
@@ -610,6 +633,7 @@ LATEST_JSON=$(jq -nc \
     repos_scanned: $repos_scanned, repos_with_dependabot: $repos_with_dependabot,
     total_open_prs: $total_open_prs, stale_prs: $stale_prs,
     coverage_gaps: $coverage_gaps, ecosystem_summary: $ecosystem_summary,
+    repo_pr_counts: $repo_pr_counts,
     delta: {new: $new_count, fixed: $fixed_count, recurring: $recurring_count}}')
 
 # A dry run must NOT write the baseline (see link-health for the rationale):

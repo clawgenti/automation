@@ -40,7 +40,7 @@ dep-bump	scanner	yes	yes	yes	dep-bump-scanner.sh	Dependency Bumps	$HOME/reports/
 pr-review	scanner	no	no	no	pr-review-scanner.sh	PR Review		yes	no
 weekly-report	scanner	no	no	no	weekly-report.sh	Weekly Report		no	no
 automation-health	index-consumer	no	no	no	automation-health-dashboard.sh	Automation Health		yes	yes
-repo-sync	sync	no	no	no	repo-sync.sh	Repo Sync		no	no"
+repo-sync	sync	no	no	no	repo-sync.sh	Repo Sync		yes	no"
 
 # _program_row <program> -> echoes the tab-separated row, or returns 1 if unknown.
 # NOTE: the `while` runs in a subshell (right side of a pipe), so a `return`
@@ -228,8 +228,7 @@ main() {
   fi
 
   # Narrow to a subset via a throwaway repos file when targets were named.
-  # index-consumer programs scan nothing, so they never project a subset.
-  # Only the scanner profile narrows to a subset. index-consumer (dashboard)
+  # Only the scanner profile narrows to a subset; index-consumer (dashboard)
   # and sync (repo-sync) act over the whole enrolled set regardless of targets.
   if [ "$profile" = "scanner" ] && [ -n "$resolved_set" ]; then
     # Create the temp dir in the PARENT so the EXIT trap (which reads the

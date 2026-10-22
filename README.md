@@ -35,7 +35,8 @@ bash scripts/repoman-run.sh <program>
 # Run across a named subset (e.g. re-run one repo after a transient failure)
 bash scripts/repoman-run.sh <program> owner/name [owner/name ...]
 
-# Preview without side effects (forwards the program's own dry-run / omits --live)
+# Preview a program: no issues/PRs filed or closed, no clones or reports written
+# (weekly-report has no --dry-run but is read-only, so it previews the same way)
 bash scripts/repoman-run.sh <program> --dry-run
 ```
 

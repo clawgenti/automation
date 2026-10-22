@@ -43,12 +43,17 @@ cat > "$REPORTS/latest.json" <<'JSON'
   "scan_id": "prev-1",
   "date": "2026-10-01T00:00:00Z",
   "repos_scanned": 2,
+  "repos_with_dependabot": 1,
+  "total_open_prs": 3,
   "stale_prs": [
     {"repo":"bob/b","pr_number":7,"title":"bump lodash","category":"security",
      "age_days":30,"issue_number":42}
   ],
   "coverage_gaps": [
     {"repo":"bob/b","reason":"no dependabot config"}
+  ],
+  "repo_pr_counts": [
+    {"repo":"bob/b","open_prs":3}
   ],
   "delta": {"new":1,"fixed":0,"recurring":0}
 }
@@ -88,5 +93,39 @@ if [ "$hrows" = "1" ]; then
 else
   echo "FAIL: history.json grew to $hrows rows on a subset run (expected 1)"; fail=1
 fi
+
+# H1: scalar totals stay WHOLE-SET-consistent on a subset run (no negative SLA).
+# alice/a (scanned) has 0 open PRs; bob/b (unscanned, carried) had 3. The written
+# total_open_prs must be 3 (merged), NOT 0 (subset-only) -> so the dashboard's
+# (total_open_prs - stale)/total_open_prs stays >= 0. stale_prs has 1 (bob/b).
+top=$(jq -r '.total_open_prs' "$REPORTS/latest.json" 2>/dev/null)
+rwd=$(jq -r '.repos_with_dependabot' "$REPORTS/latest.json" 2>/dev/null)
+stale=$(jq -r '.stale_prs | length' "$REPORTS/latest.json" 2>/dev/null)
+if [ "$top" = "3" ] && [ "$rwd" = "1" ]; then
+  echo "PASS: subset totals merged whole-set (total_open_prs=$top, repos_with_dependabot=$rwd)"
+else
+  echo "FAIL: subset totals not merged (total_open_prs=$top want 3, repos_with_dependabot=$rwd want 1)"; fail=1
+fi
+# the pre-fix bug: stale(3 whole-set) > total_open_prs(subset 0) -> negative SLA.
+if [ "$stale" -le "$top" ]; then
+  echo "PASS: stale ($stale) <= total_open_prs ($top) -> SLA non-negative"
+else
+  echo "FAIL: stale ($stale) > total_open_prs ($top) -> dashboard SLA would go negative"; fail=1
+fi
+
+# H2: dep-bump dry-run writes NO baseline (the gate Hai flagged as untested).
+rm -f "$REPORTS/latest.json" "$REPORTS/history.json"
+printf '{"scan_id":"prev-1"}\n' > "$REPORTS/latest.json"   # a baseline to (not) overwrite
+PRE=$(cat "$REPORTS/latest.json")
+REPORTS_DIR="$REPORTS" PATH="$BIN:$PATH" \
+  REPOMAN_REPOS_FILE="$SUBSET" REPOMAN_SUBSET_REPOS="alice/a" \
+  bash "$SCANNER" --dry-run >/dev/null 2>&1
+if [ "$(cat "$REPORTS/latest.json")" = "$PRE" ]; then
+  echo "PASS: dep-bump --dry-run left latest.json untouched"
+else
+  echo "FAIL: dep-bump --dry-run overwrote latest.json"; fail=1
+fi
+[ ! -f "$REPORTS/history.json" ] && echo "PASS: dep-bump --dry-run wrote no history.json" \
+  || { echo "FAIL: dep-bump --dry-run wrote history.json"; fail=1; }
 
 [ "$fail" -eq 0 ] && echo "PASS" || { echo "FAILURES"; exit 1; }

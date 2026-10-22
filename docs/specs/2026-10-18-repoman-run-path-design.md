@@ -247,8 +247,23 @@ written state to the **repos it actually scanned this run**:
    `total_links_checked`, `ecosystem_summary`, …). Otherwise the dashboard,
    which derives ratios like SLA compliance `(total_open_prs - stale)/total_open_prs`
    and coverage `repos_with_dependabot/repos_scanned`, computes nonsense (e.g. a
-   negative compliance rate). The scanner recomputes these totals over the
-   merged (scanned ∪ carried) set it actually writes.
+   negative compliance rate).
+
+   Two mechanisms, by stakes:
+   - **dep-bump** feeds the SLA/coverage **ratios**, where a subset-vs-whole-set
+     mismatch goes *negative*. `total_open_prs` counts all open PRs (not just the
+     stale ones in the lists), so it cannot be derived from `stale_prs`. dep-bump
+     therefore stores a per-repo open-PR breakdown (`repo_pr_counts`) in
+     `latest.json`; a subset run merges this run's scanned counts with the prior
+     report's carried counts and **recomputes** `total_open_prs` /
+     `repos_with_dependabot` from the merged breakdown — exactly consistent with
+     the carried lists. The breakdown is rewritten each full run (self-pruning,
+     ~tens of bytes/repo).
+   - **link-health**'s `repos_scanned` / `total_links_checked` are **display
+     counts only** (the dashboard never divides them), so there is no
+     negative-ratio risk. A subset run keeps the prior report's whole-set scalars
+     (no per-repo link-count storage needed); the broken counts come from the
+     carried `broken[]` list directly. Lower stakes, simpler mechanism.
 
 **Dry-run writes nothing to the baseline (REVISED — PR #117 round 2).** A
 `--dry-run` run must **not** write `latest.json` or append `history.json` — only
@@ -321,12 +336,18 @@ orchestrator without one is incomplete.
 **Contract:** `repoman run <program> --dry-run` forwards `--dry-run` to the
 program when the program's table row declares it supports it
 (`supports_dry_run=yes`). The orchestrator still runs its own steps
-(resolution, output gate, capability check, clone refresh, exec, index write);
-`--dry-run` changes only what it hands the *program*, so the program itself
-suppresses its mutating tail (issue/PR creation, docs push). Programs that do
-not accept `--dry-run` (`weekly-report`) ignore the passthrough — the flag is
-simply not forwarded to them, and the run proceeds normally. The program table
-gains a `supports_dry_run` column for this.
+(resolution, output gate, capability check — index write is skipped on a dry
+run; see below); `--dry-run` changes only what it hands the *program*, so the
+program itself suppresses its mutating tail (issue/PR creation, docs push,
+report/baseline writes, and — for `repo-sync` — the clone/pull itself). All
+run-path programs support `--dry-run` as side-effect-free **except
+`weekly-report`** (`supports_dry_run=no`): the flag is not forwarded and it
+proceeds as a normal run — which is itself read-only (it queries GitHub and
+writes a report file, filing/closing/pushing nothing), so this is not a
+mutating side effect. **The "side-effect-free preview" promise therefore holds
+for every program; for `weekly-report` it holds because the program is read-only
+by nature, not because a dry-run flag suppresses writes.** The program table has
+a `supports_dry_run` column for this.
 
 This supersedes the earlier implementation-internal reading of `--dry-run` as
 "preview resolution only, skip execution": the flag now means "a real run with
