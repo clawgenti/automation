@@ -85,6 +85,20 @@ immediately so a pod restart mid-setup can resume.
 
 ## Program invocation flow
 
+> **Superseded by the run-path design.** The sketch below is the original
+> vision. The run path **as built** is specified in
+> [`2026-10-18-repoman-run-path-design.md`](2026-10-18-repoman-run-path-design.md)
+> and differs in several ways, which that spec is authoritative on:
+> program ids are unsuffixed (`link-health`, not `link-health-scanner`); there is
+> **no `--repos`/`--output-repo` flag** (the subset is passed via an env-scoped
+> temporary `repos.json` through `REPOMAN_REPOS_FILE`, and output routing is read
+> from `programs/<name>.json`); `repoman run` is **non-interactive** (the
+> first-invocation "where to post?" prompt lives in the `/repoman` skill at setup
+> via `set-output`, not in the run path); and stateful scanners are
+> **subset-aware** (a named-subset run carries unscanned repos' prior findings
+> forward and skips the history append). Read the sketch below for intent, that
+> spec for behavior.
+
 ```
 repoman run link-health-scanner
   │

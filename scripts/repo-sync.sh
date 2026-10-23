@@ -12,7 +12,7 @@ source "$SCRIPT_DIR/program-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: repo-sync.sh [--refresh-skills] [--help]
+Usage: repo-sync.sh [--refresh-skills] [--dry-run] [--help]
 
 Sync enrolled repo clones (from ~/.repoman/repos.json) under
 <repos_dir>/<owner>/<name>/. Clones if missing, pulls (--ff-only) if present.
@@ -22,14 +22,19 @@ abort the run.
   --refresh-skills   Also pull a local agent-skills clone. Setting the
                      REPOMAN_SKILLS_DIR env var alone also triggers this;
                      the var selects the clone path (default ~/agent-skills).
+  --dry-run          Preview only: print whether each enrolled repo would be
+                     cloned (missing) or pulled (present), touch nothing on
+                     disk or GitHub, and exit 0. Side-effect-free.
   --help             Show this help and exit 0.
 EOF
 }
 
 REFRESH_SKILLS=0
+DRY_RUN=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --refresh-skills) REFRESH_SKILLS=1; shift ;;
+    --dry-run) DRY_RUN=true; shift ;;
     --help) usage; exit 0 ;;
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -97,6 +102,9 @@ while IFS= read -r full; do
   fi
   dir="$REPOS_DIR/$owner/$name"
   if [ -d "$dir/.git" ]; then
+    if [ "$DRY_RUN" = true ]; then
+      echo "[DRY RUN] would pull $full (present at $dir)"; pulled=$((pulled + 1)); continue
+    fi
     if git -C "$dir" pull --ff-only 2>"$giterr"; then
       pulled=$((pulled + 1))
     else
@@ -104,6 +112,9 @@ while IFS= read -r full; do
       failed=$((failed + 1)); failures="$failures  $full (pull): $msg"$'\n'
     fi
   else
+    if [ "$DRY_RUN" = true ]; then
+      echo "[DRY RUN] would clone $full -> $dir"; cloned=$((cloned + 1)); continue
+    fi
     if ! mkdir -p "$REPOS_DIR/$owner"; then
       failed=$((failed + 1)); failures="$failures  $full (mkdir failed)"$'\n'
       continue
@@ -139,7 +150,9 @@ fi
 # var alone must not be a silent no-op, so it triggers the refresh here too.
 if [ "$REFRESH_SKILLS" -eq 1 ] || [ -n "${REPOMAN_SKILLS_DIR:-}" ]; then
   skills_dir="${REPOMAN_SKILLS_DIR:-$HOME/agent-skills}"
-  if [ -d "$skills_dir/.git" ]; then
+  if [ "$DRY_RUN" = true ]; then
+    echo "[DRY RUN] would refresh skills clone at $skills_dir"
+  elif [ -d "$skills_dir/.git" ]; then
     if git -C "$skills_dir" pull --ff-only; then
       echo "repo-sync: refreshed skills clone at $skills_dir"
     else
