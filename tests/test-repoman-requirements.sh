@@ -85,6 +85,25 @@ esac
 # --- prose bullets outside the block are ignored (no false key match) ---
 # (covered by the happy-path file above, which has prose bullets before the block)
 
+# --- executed directly (not sourced) -> fail loud, non-zero, with guidance ---
+# Regression for the silent empty-requirements bug: running the lib as a command
+# must NOT exit 0 with empty stdout (which a caller would parse as [] and write
+# as empty requirements). It must error to stderr and exit non-zero.
+REQ_SH="$SCRIPT_DIR/../scripts/repoman-requirements.sh"
+# `|| rc=$?` keeps `set -e` from aborting the test on the (expected) non-zero
+# exit; without it the failing command-substitution kills the whole script.
+rc=0
+out=$(bash "$REQ_SH" "$SK" 2>/dev/null) || rc=$?
+[ "$rc" -ne 0 ] \
+  || { echo "FAIL direct-exec: expected non-zero exit, got $rc"; fail=1; }
+[ -z "$out" ] \
+  || { echo "FAIL direct-exec: expected empty stdout, got [$out]"; fail=1; }
+err=$(bash "$REQ_SH" "$SK" 2>&1 >/dev/null) || true
+case "$err" in
+  *"sourced library"*) ;;
+  *) echo "FAIL direct-exec: stderr should explain it is a sourced library, got: [$err]"; fail=1 ;;
+esac
+
 [ "$fail" -eq 0 ] \
   && echo "PASS: repoman_parse_requirements" \
   || exit 1

@@ -79,6 +79,8 @@ Add these to your shell profile if you want them persistent.
 
 ## Running the Scanner
 
+> **Note:** Under RepoMan, prefer the run path — `bash scripts/repoman-run.sh link-health` — which also updates the `_index.json` registry the health dashboard reads. Invoking the scanner directly (below) still works but does **not** update that registry. See "Running a program (RepoMan run path)" in the [README](../README.md#running-a-program-repoman-run-path).
+
 ```bash
 # Dry run -- scan and report, no issues created
 bash scripts/link-health-scanner.sh --dry-run
